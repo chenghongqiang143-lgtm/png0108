@@ -16,7 +16,6 @@ export interface Photo {
   createdAt: number;
   width?: number;
   height?: number;
-  isAnalyzing?: boolean; 
   isFavorite?: boolean; // New: Favorite status
 }
 
@@ -45,13 +44,6 @@ export interface ColorGroup {
   name: string;
   colors: ColorItem[];
   isCustom?: boolean;
-}
-
-export interface AIAnalysisResult {
-  title: string;
-  description: string;
-  tags: string[];
-  suggestedCategorySlug: string;
 }
 
 export type ThemeColor = 'zinc' | 'blue' | 'indigo' | 'rose' | 'orange' | 'emerald' | 'cyan' | 'violet' | 'fuchsia' | 'lime' | 'amber' | 'teal' | 'sky';

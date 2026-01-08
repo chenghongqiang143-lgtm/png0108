@@ -1,6 +1,6 @@
 {
-  "name": "灵感相册Smart Gallery AI",
-  "description": "A modern, AI-powered photo album application. Features intelligent categorization, automatic tagging, rich search capabilities, and manual organization.",
+  "name": "灵感相册 Smart Gallery",
+  "description": "A modern photo album application. Features rich search capabilities and manual organization.",
   "requestFramePermissions": [],
   "share_target": {
     "action": "/",

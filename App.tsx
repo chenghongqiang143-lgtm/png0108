@@ -4,7 +4,7 @@ import { PhotoModal } from './components/PhotoModal';
 import { ColorTool } from './components/ColorTool';
 import { NoteTool } from './components/NoteTool';
 import { Photo, Category, ThemeColor, ColorGroup } from './types';
-import { Search, Upload, ImagePlus, Menu, Edit2, Trash2, LayoutGrid, Grid3x3, Square, Folder, ChevronRight, Image as ImageIcon, Check, Loader2, Clock, Sparkles, X, CheckSquare, MousePointer2, Move, Tag } from 'lucide-react';
+import { Search, Upload, ImagePlus, Menu, Edit2, Trash2, LayoutGrid, Grid3x3, Square, Folder, ChevronRight, Image as ImageIcon, Check, Loader2, Clock, X, CheckSquare, MousePointer2, Move, Tag } from 'lucide-react';
 
 // Initial Dummy Data
 const INITIAL_CATEGORIES: Category[] = [
@@ -242,7 +242,6 @@ const App: React.FC = () => {
             tags: [],
             categoryId: 'uncategorized',
             createdAt: Date.now(),
-            isAnalyzing: false // No AI analysis
           };
           newPhotosToState.push(newPhoto);
       }
@@ -891,7 +890,7 @@ const App: React.FC = () => {
                               <img 
                                 src={photo.url} 
                                 alt={photo.title} 
-                                className={`w-full h-full object-cover transition-transform duration-700 ${photo.isAnalyzing ? 'scale-110 blur-sm' : 'group-hover:scale-110'}`}
+                                className={`w-full h-full object-cover transition-transform duration-700 group-hover:scale-110`}
                                 loading="lazy"
                                 onError={() => handleImageError(photo.id)}
                               />
@@ -947,7 +946,7 @@ const App: React.FC = () => {
               </div>
               
               <div className="border-t border-slate-100 pt-6">
-                 <p className="text-xs text-slate-400 text-center">Version 1.2.0 • AI Powered</p>
+                 <p className="text-xs text-slate-400 text-center">Version 1.2.0</p>
               </div>
            </div>
         </div>
