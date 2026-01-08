@@ -51,6 +51,14 @@ const rgbToHsv = (r: number, g: number, b: number) => {
   };
 };
 
+// Distance helper for pinch zoom
+const getDistance = (touches: React.TouchList) => {
+  return Math.hypot(
+    touches[0].clientX - touches[1].clientX,
+    touches[0].clientY - touches[1].clientY
+  );
+};
+
 export const PhotoModal: React.FC<PhotoModalProps> = ({
   photo,
   categories,
@@ -87,6 +95,12 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [isDragging, setIsDragging] = useState(false);
   const dragStart = useRef({ x: 0, y: 0 });
+  const initialPinchDist = useRef<number | null>(null);
+  const initialZoom = useRef(1);
+
+  // Swipe State
+  const touchStartX = useRef(0);
+  const touchStartY = useRef(0);
 
   // Fullscreen State
   const [isFullscreen, setIsFullscreen] = useState(false);
@@ -195,33 +209,93 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
   const handleZoomIn = () => setZoomLevel(prev => Math.min(prev + 0.5, 4));
   const handleZoomOut = () => {
     setZoomLevel(prev => {
-      const newZoom = Math.max(prev - 0.5, 1);
-      if (newZoom === 1) setPan({ x: 0, y: 0 }); // Reset pan when fully zoomed out
+      const newZoom = Math.max(prev - 0.5, 0.5); // Allow going below 1 for exit gesture
+      if (newZoom <= 1) setPan({ x: 0, y: 0 });
       return newZoom;
     });
   };
 
-  // Panning Logic
-  const handlePointerDown = (e: React.PointerEvent) => {
-    if (isPickerActive || zoomLevel <= 1) return;
-    setIsDragging(true);
-    dragStart.current = { x: e.clientX - pan.x, y: e.clientY - pan.y };
-    e.currentTarget.setPointerCapture(e.pointerId);
-    e.preventDefault();
+  // Touch & Mouse Event Handlers
+  const handleTouchStart = (e: React.TouchEvent) => {
+    if (isPickerActive) return;
+    
+    if (e.touches.length === 2) {
+      // Pinch Start
+      initialPinchDist.current = getDistance(e.touches);
+      initialZoom.current = zoomLevel;
+    } else if (e.touches.length === 1) {
+      // Record for Swipe or Drag
+      touchStartX.current = e.touches[0].clientX;
+      touchStartY.current = e.touches[0].clientY;
+
+      // Drag Start
+      setIsDragging(true);
+      dragStart.current = { x: e.touches[0].clientX - pan.x, y: e.touches[0].clientY - pan.y };
+    }
   };
 
-  const handlePointerMove = (e: React.PointerEvent) => {
+  const handleTouchMove = (e: React.TouchEvent) => {
+    if (isPickerActive) return;
+
+    if (e.touches.length === 2 && initialPinchDist.current) {
+       // Pinching
+       const dist = getDistance(e.touches);
+       const scale = dist / initialPinchDist.current;
+       setZoomLevel(Math.min(Math.max(initialZoom.current * scale, 0.5), 5));
+       e.preventDefault();
+    } else if (e.touches.length === 1 && isDragging && zoomLevel > 1) {
+       // Panning (only if zoomed in)
+       setPan({
+         x: e.touches[0].clientX - dragStart.current.x,
+         y: e.touches[0].clientY - dragStart.current.y
+       });
+    }
+  };
+
+  const handleTouchEnd = (e: React.TouchEvent) => {
+    initialPinchDist.current = null;
+    setIsDragging(false);
+
+    // Swipe Gesture Check (Only when not zoomed in)
+    if (zoomLevel === 1 && e.changedTouches.length === 1) {
+        const deltaX = e.changedTouches[0].clientX - touchStartX.current;
+        const deltaY = e.changedTouches[0].clientY - touchStartY.current;
+        
+        // Horizontal swipe detected (threshold of 50px, and mostly horizontal)
+        if (Math.abs(deltaX) > 50 && Math.abs(deltaY) < 30) {
+            if (deltaX > 0 && hasPrev && onPrev) onPrev(); // Swipe Right -> Prev
+            if (deltaX < 0 && hasNext && onNext) onNext(); // Swipe Left -> Next
+        }
+    }
+
+    // Close on Zoom Out Gesture
+    if (zoomLevel < 0.7) {
+      onClose();
+    } else if (zoomLevel < 1) {
+      // Snap back to 100%
+      setZoomLevel(1);
+      setPan({ x: 0, y: 0 });
+    }
+  };
+
+  // Mouse Handlers (Desktop)
+  const handleMouseDown = (e: React.MouseEvent) => {
+    if (isPickerActive || zoomLevel <= 1) return;
+    e.preventDefault();
+    setIsDragging(true);
+    dragStart.current = { x: e.clientX - pan.x, y: e.clientY - pan.y };
+  };
+
+  const handleMouseMove = (e: React.MouseEvent) => {
     if (!isDragging) return;
     setPan({
       x: e.clientX - dragStart.current.x,
       y: e.clientY - dragStart.current.y
     });
-    e.preventDefault();
   };
 
-  const handlePointerUp = (e: React.PointerEvent) => {
+  const handleMouseUp = () => {
     setIsDragging(false);
-    e.currentTarget.releasePointerCapture(e.pointerId);
   };
 
   // Color Picker Logic
@@ -268,31 +342,29 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
       {/* Main Container */}
       <div className="bg-transparent md:bg-white w-full h-full md:h-auto md:max-h-[85vh] md:max-w-6xl overflow-hidden flex flex-col md:flex-row shadow-2xl relative rounded-none">
         
-        {/* Mobile Close Button (Top Right) */}
-        {!isEditing && (
-            <button 
-            onClick={onClose}
-            className="absolute top-4 right-4 z-30 md:hidden bg-black/50 p-2 text-white/80 rounded-full backdrop-blur-sm pt-safe"
-            >
-            <X size={20} />
-            </button>
-        )}
-
         {/* IMAGE SECTION (Full screen on mobile view, Partial on mobile edit, Left side on Desktop) */}
         <div 
             ref={imgContainerRef}
             className={`${isEditing ? 'h-72 md:h-auto md:h-full' : 'h-full md:h-auto'} w-full md:w-2/3 bg-black/40 md:bg-zinc-950 flex items-center justify-center relative group shrink-0 overflow-hidden transition-all duration-300`}
         >
           
-          {/* Zoom Controls (Top Left) */}
-          <div className="absolute top-4 left-4 z-30 flex flex-col gap-2 pointer-events-auto">
-             <button onClick={handleZoomIn} className="p-2 bg-black/50 text-white hover:bg-black/70 rounded-none backdrop-blur-sm transition-colors" title="放大">
-                <ZoomIn size={20} />
-             </button>
-             <button onClick={handleZoomOut} className="p-2 bg-black/50 text-white hover:bg-black/70 rounded-none backdrop-blur-sm transition-colors" title="缩小">
-                <ZoomOut size={20} />
-             </button>
-          </div>
+          {/* Top Controls (Zoom & Close) - Moved down for Safe Area */}
+          {!isEditing && (
+            <div className="absolute top-0 inset-x-0 z-30 flex justify-end p-4 pt-safe mt-12 gap-3 pointer-events-none">
+                <div className="flex gap-2 bg-black/50 p-1.5 rounded-full backdrop-blur-md pointer-events-auto">
+                    <button onClick={handleZoomOut} className="p-2 text-white/90 hover:text-white hover:bg-white/20 rounded-full transition-colors" title="缩小">
+                        <ZoomOut size={20} />
+                    </button>
+                    <button onClick={handleZoomIn} className="p-2 text-white/90 hover:text-white hover:bg-white/20 rounded-full transition-colors" title="放大">
+                        <ZoomIn size={20} />
+                    </button>
+                    <div className="w-px bg-white/20 mx-1"></div>
+                    <button onClick={onClose} className="p-2 text-white/90 hover:text-white hover:bg-white/20 rounded-full transition-colors" title="关闭">
+                        <X size={20} />
+                    </button>
+                </div>
+            </div>
+          )}
 
           <img 
             ref={imgRef}
@@ -300,22 +372,28 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
             alt={photo.title} 
             crossOrigin="anonymous" 
             onClick={handleImageClick}
-            onPointerDown={handlePointerDown}
-            onPointerMove={handlePointerMove}
-            onPointerUp={handlePointerUp}
-            onPointerLeave={handlePointerUp}
+            // Mouse Events
+            onMouseDown={handleMouseDown}
+            onMouseMove={handleMouseMove}
+            onMouseUp={handleMouseUp}
+            onMouseLeave={handleMouseUp}
+            // Touch Events
+            onTouchStart={handleTouchStart}
+            onTouchMove={handleTouchMove}
+            onTouchEnd={handleTouchEnd}
+            
             className={`object-contain ${isDragging ? '' : 'transition-transform duration-200'} ${isPickerActive ? 'cursor-crosshair' : (zoomLevel > 1 ? (isDragging ? 'cursor-grabbing' : 'cursor-grab') : 'default')}`}
             style={{ 
               transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoomLevel})`,
               maxHeight: '100%',
               maxWidth: '100%',
-              touchAction: 'none' // Prevent default touch actions when dragging
+              touchAction: 'none' // Prevent default touch actions (scroll/zoom by browser)
             }}
           />
           
           {/* Picker Active Indicator Overlay */}
           {isPickerActive && (
-             <div className="absolute top-4 left-16 md:left-20 z-20 bg-black/60 text-white px-3 py-1.5 rounded-full text-xs font-bold backdrop-blur-md pointer-events-none animate-pulse">
+             <div className="absolute top-4 left-1/2 -translate-x-1/2 mt-16 z-20 bg-black/60 text-white px-3 py-1.5 rounded-full text-xs font-bold backdrop-blur-md pointer-events-none animate-pulse">
                 点击图片取色中...
              </div>
           )}
@@ -365,15 +443,17 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
             </div>
           )}
 
-          {/* Navigation Arrows (Desktop) */}
-          <div className="absolute inset-0 hidden md:flex items-center justify-between px-4 pointer-events-none">
+          {/* Navigation Arrows (Visible on all devices now) */}
+          <div className="absolute inset-y-0 left-0 flex items-center px-2 pointer-events-none">
               {hasPrev ? (
-                  <button onClick={(e) => { e.stopPropagation(); onPrev?.(); }} className="pointer-events-auto p-2 rounded-full bg-black/20 hover:bg-black/50 text-white/70 hover:text-white transition-all backdrop-blur-sm">
+                  <button onClick={(e) => { e.stopPropagation(); onPrev?.(); }} className="pointer-events-auto p-2 rounded-full bg-black/10 hover:bg-black/40 text-white/50 hover:text-white transition-all backdrop-blur-[2px]">
                       <ChevronLeft size={32} />
                   </button>
               ) : <div></div>}
+          </div>
+          <div className="absolute inset-y-0 right-0 flex items-center px-2 pointer-events-none">
                {hasNext ? (
-                  <button onClick={(e) => { e.stopPropagation(); onNext?.(); }} className="pointer-events-auto p-2 rounded-full bg-black/20 hover:bg-black/50 text-white/70 hover:text-white transition-all backdrop-blur-sm">
+                  <button onClick={(e) => { e.stopPropagation(); onNext?.(); }} className="pointer-events-auto p-2 rounded-full bg-black/10 hover:bg-black/40 text-white/50 hover:text-white transition-all backdrop-blur-[2px]">
                       <ChevronRight size={32} />
                   </button>
               ) : <div></div>}
@@ -381,11 +461,17 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
 
           {/* MOBILE BOTTOM BAR (Overlay) - Hide when editing */}
           {!isEditing && (
-            <div className="absolute bottom-0 inset-x-0 bg-gradient-to-t from-black/90 to-transparent p-6 pb-safe pt-12 flex items-end justify-between md:hidden z-20">
-               <div className="flex-1 min-w-0 mr-4">
+            <div className="absolute bottom-0 inset-x-0 bg-gradient-to-t from-black/90 to-transparent p-6 pb-safe pt-12 flex items-end justify-between md:hidden z-20 pointer-events-none">
+               <div className="flex-1 min-w-0 mr-4 pointer-events-auto">
                   <h2 className="text-white font-bold text-lg truncate drop-shadow-md">{photo.title}</h2>
                </div>
-               <div className="flex items-center gap-4 shrink-0">
+               <div className="flex items-center gap-3 shrink-0 pointer-events-auto">
+                  <button 
+                    onClick={() => setIsEditing(true)}
+                    className="p-3 rounded-full backdrop-blur-md bg-white/10 text-white transition-all"
+                  >
+                     <Edit2 size={20} />
+                  </button>
                   <button 
                     onClick={() => setIsPickerActive(!isPickerActive)}
                     className={`p-3 rounded-full backdrop-blur-md transition-all ${isPickerActive ? 'bg-white text-black' : 'bg-white/10 text-white'}`}
@@ -453,17 +539,18 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
                    </button>
                  </>
                )}
+               {/* Desktop Close Button */}
                <button 
                 onClick={onClose}
-                className="text-gray-400 hover:text-gray-900 transition-colors"
+                className="hidden md:block text-gray-400 hover:text-gray-900 transition-colors"
               >
                 <X size={24} />
               </button>
             </div>
           </div>
 
-          {/* Content Scrollable */}
-          <div className="flex-1 overflow-y-auto p-6 space-y-8 pb-6 custom-scrollbar">
+          {/* Content Scrollable - Added explicit scrolling for landscape */}
+          <div className="flex-1 overflow-y-auto p-6 space-y-8 pb-6 custom-scrollbar h-0 min-h-0 md:h-auto">
             
             {/* Title & Description */}
             <div className="group relative">

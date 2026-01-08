@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Note, NoteCategory } from '../types';
-import { Bold, Highlighter, ListOrdered, Image as ImageIcon, Heading1, Heading2, Heading3, CheckSquare, Plus, Trash2, ArrowLeft, Save, StickyNote, FolderPlus, MoreHorizontal, Edit2 } from 'lucide-react';
+import { Bold, Highlighter, Image as ImageIcon, CheckSquare, Plus, Trash2, ArrowLeft, Save, StickyNote, FolderPlus, Edit2, Heading1, Heading2, Heading3 } from 'lucide-react';
 
 const DEFAULT_CATEGORIES: NoteCategory[] = [
   { id: 'all', name: '全部' },
@@ -27,6 +27,7 @@ export const NoteTool: React.FC = () => {
   // Edit State
   const [editContent, setEditContent] = useState('');
   const [editTitle, setEditTitle] = useState('');
+  const [editCategoryId, setEditCategoryId] = useState('');
   
   // Category Edit State (Long Press)
   const [contextMenuCategory, setContextMenuCategory] = useState<NoteCategory | null>(null);
@@ -53,6 +54,7 @@ export const NoteTool: React.FC = () => {
       if (note) {
         setEditTitle(note.title);
         setEditContent(note.content);
+        setEditCategoryId(note.categoryId);
         if (editorRef.current) {
           editorRef.current.innerHTML = note.content;
         }
@@ -103,6 +105,7 @@ export const NoteTool: React.FC = () => {
         ...n,
         title: editTitle,
         content: content,
+        categoryId: editCategoryId,
         updatedAt: Date.now()
       } : n));
     }
@@ -133,7 +136,6 @@ export const NoteTool: React.FC = () => {
   const handleRenameCategory = () => {
     if (!contextMenuCategory) return;
     const newName = prompt("重命名分类", contextMenuCategory.name);
-    // Explicitly using the captured ID to ensure closure scope is correct, though state ref is usually fine
     const targetId = contextMenuCategory.id;
     if (newName && newName.trim()) {
       setCategories(prev => prev.map(c => c.id === targetId ? { ...c, name: newName.trim() } : c));
@@ -145,7 +147,6 @@ export const NoteTool: React.FC = () => {
      if (!contextMenuCategory) return;
      const targetId = contextMenuCategory.id;
      if (confirm(`删除分类 "${contextMenuCategory.name}"? (该分类下的便签将移至"灵感")`)) {
-        // Move notes to default 'idea' or 'all' equivalent before deleting
         setNotes(prev => prev.map(n => n.categoryId === targetId ? { ...n, categoryId: 'idea' } : n));
         setCategories(prev => prev.filter(c => c.id !== targetId));
         if (selectedCategoryId === targetId) setSelectedCategoryId('all');
@@ -153,25 +154,127 @@ export const NoteTool: React.FC = () => {
      setContextMenuCategory(null);
   };
 
-  // Editor Commands
-  const execCmd = (command: string, value: string | undefined = undefined) => {
-    document.execCommand(command, false, value);
-    if (editorRef.current) {
-       editorRef.current.focus();
+  // --- Editor Logic ---
+
+  // Find the current block element (div, p, etc) inside editor
+  const getCurrentBlock = (): HTMLElement | null => {
+    const selection = window.getSelection();
+    if (!selection || !selection.rangeCount) return null;
+    let node = selection.getRangeAt(0).commonAncestorContainer;
+    if (node.nodeType === 3) node = node.parentElement as HTMLElement;
+    
+    let el = node as HTMLElement;
+    while (el && el !== editorRef.current && el.parentElement !== editorRef.current) {
+        if (el.parentElement) el = el.parentElement;
+        else break;
     }
+    // If we've reached the root editor div and the node is the editor div itself
+    // or a direct text node child, we consider "no block found" so we can handle it manually
+    if (el === editorRef.current) return null;
+    return el;
+  };
+
+  const handleLineFormat = (command: string, value?: string) => {
+    const selection = window.getSelection();
+    if (!selection || !selection.rangeCount) return;
+
+    // If text is already selected, just apply to selection
+    if (!selection.isCollapsed) {
+        document.execCommand(command, false, value);
+        if (editorRef.current) editorRef.current.focus();
+        return;
+    }
+
+    // Cursor is collapsed. Identify the block.
+    let block = getCurrentBlock();
+
+    // If no block is found (e.g. raw text in editor root), try to wrap current line in a div first
+    if (!block) {
+        document.execCommand('formatBlock', false, 'div');
+        block = getCurrentBlock(); // Try to find it again
+    }
+
+    if (block) {
+        const range = document.createRange();
+        range.selectNodeContents(block);
+        selection.removeAllRanges();
+        selection.addRange(range);
+        document.execCommand(command, false, value);
+        // Move cursor to end of block
+        selection.collapseToEnd();
+    } else {
+        // Fallback: just execute (might toggle style for future typing)
+        document.execCommand(command, false, value);
+    }
+    
+    if (editorRef.current) editorRef.current.focus();
+  };
+
+  const toggleHeading = (tag: string) => {
+      const block = getCurrentBlock();
+      // If currently the same heading, revert to div (normal text)
+      if (block && block.tagName === tag.toUpperCase()) {
+          document.execCommand('formatBlock', false, 'div');
+      } else {
+          // formatBlock automatically handles wrapping text nodes if needed
+          document.execCommand('formatBlock', false, tag);
+      }
+      if (editorRef.current) editorRef.current.focus();
+  };
+
+  const toggleCheckboxLine = () => {
+    const selection = window.getSelection();
+    if (!selection || !selection.rangeCount) return;
+    
+    let block = getCurrentBlock();
+
+    // Ensure we have a block to work with
+    if (!block) {
+         document.execCommand('formatBlock', false, 'div');
+         block = getCurrentBlock();
+    }
+    
+    if (block) {
+        if (block.classList.contains('todo-item')) {
+             // Convert back to normal div, remove checkbox
+             const newDiv = document.createElement('div');
+             // Regex to strip the input tag, keeping inner content
+             newDiv.innerHTML = block.innerHTML.replace(/<input[^>]*>/i, '');
+             block.replaceWith(newDiv);
+             
+             const range = document.createRange();
+             range.selectNodeContents(newDiv);
+             range.collapse(false);
+             selection.removeAllRanges();
+             selection.addRange(range);
+        } else {
+            // Convert to todo item
+            const newDiv = document.createElement('div');
+            newDiv.className = 'todo-item';
+            newDiv.style.cssText = 'display: flex; align-items: center;';
+            newDiv.innerHTML = `<input type="checkbox" style="margin-right: 8px;" />${block.innerHTML}`;
+            block.replaceWith(newDiv);
+            
+            const range = document.createRange();
+            range.selectNodeContents(newDiv);
+            range.collapse(false);
+            selection.removeAllRanges();
+            selection.addRange(range);
+        }
+    } else {
+        // Insert new checkbox at root (fallback)
+        const html = '<div class="todo-item" style="display: flex; align-items: center;"><input type="checkbox" style="margin-right: 8px;" /> &nbsp;</div>';
+        document.execCommand('insertHTML', false, html);
+    }
+    
+    if (editorRef.current) editorRef.current.focus();
   };
 
   const insertImage = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
       const url = URL.createObjectURL(e.target.files[0]);
-      execCmd('insertImage', url);
+      document.execCommand('insertImage', false, url);
     }
-  };
-  
-  const insertCheckbox = () => {
-     // Insert a checkbox wrapped in a div with a specific class for identification
-     const html = '<div class="todo-item" style="display: flex; align-items: center;"><input type="checkbox" style="margin-right: 8px;" /> &nbsp;</div>';
-     execCmd('insertHTML', html);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
@@ -186,26 +289,22 @@ export const NoteTool: React.FC = () => {
       // Check for Checkbox Line
       const todoItem = (node as HTMLElement).closest('.todo-item');
       if (todoItem) {
-        // We are in a todo item, create a new one
-        e.preventDefault(); // Prevent default div split
+        e.preventDefault(); 
         
-        // Manual insertion of new checkbox line
+        // Create new checkbox line
         const newRow = document.createElement('div');
         newRow.className = 'todo-item';
         newRow.style.display = 'flex';
         newRow.style.alignItems = 'center';
         newRow.innerHTML = '<input type="checkbox" style="margin-right: 8px;" /> &nbsp;';
         
-        // Insert after current row
         if (todoItem.nextSibling) {
             todoItem.parentNode?.insertBefore(newRow, todoItem.nextSibling);
         } else {
             todoItem.parentNode?.appendChild(newRow);
         }
 
-        // Move cursor to new row
         const newRange = document.createRange();
-        // Position at end of the new row's text content (the &nbsp;)
         newRange.selectNodeContents(newRow);
         newRange.collapse(false);
         selection.removeAllRanges();
@@ -222,8 +321,8 @@ export const NoteTool: React.FC = () => {
       <div className="h-full flex flex-col bg-white">
         {/* Header */}
         <div className="flex items-center justify-between p-4 border-b border-slate-200 bg-white sticky top-0 z-10">
-          <div className="flex items-center gap-4 flex-1">
-            <button onClick={() => setSelectedNoteId(null)} className="text-slate-500 hover:text-slate-900">
+          <div className="flex items-center gap-4 flex-1 overflow-hidden">
+            <button onClick={() => setSelectedNoteId(null)} className="text-slate-500 hover:text-slate-900 shrink-0">
               <ArrowLeft size={20} />
             </button>
             <input 
@@ -231,46 +330,56 @@ export const NoteTool: React.FC = () => {
               value={editTitle}
               onChange={(e) => setEditTitle(e.target.value)}
               onBlur={handleSave}
-              className="text-xl font-bold text-slate-900 border-none focus:outline-none w-full"
+              className="text-lg font-bold text-slate-900 border-none focus:outline-none w-full min-w-0"
               placeholder="标题"
             />
           </div>
-          <button 
-            onClick={handleSave}
-            className="flex items-center gap-2 text-green-600 font-bold uppercase text-xs hover:bg-green-50 px-3 py-1.5 transition-colors"
-          >
-            <Save size={16} /> 已保存
-          </button>
+          <div className="flex items-center gap-3 pl-2">
+            <select
+                value={editCategoryId}
+                onChange={(e) => setEditCategoryId(e.target.value)}
+                onBlur={handleSave}
+                className="text-xs font-bold text-slate-500 bg-slate-50 border-none rounded-sm py-1.5 px-2 outline-none cursor-pointer hover:bg-slate-100 transition-colors max-w-[100px]"
+            >
+                {categories.filter(c => c.id !== 'all').map(c => (
+                    <option key={c.id} value={c.id}>{c.name}</option>
+                ))}
+            </select>
+            <button 
+                onClick={handleSave}
+                className="flex items-center gap-2 text-green-600 font-bold uppercase text-xs hover:bg-green-50 px-3 py-1.5 transition-colors shrink-0"
+            >
+                <Save size={16} /> <span className="hidden sm:inline">已保存</span>
+            </button>
+          </div>
         </div>
 
-        {/* Toolbar */}
+        {/* Toolbar - Compact */}
         <div className="flex items-center gap-1 p-2 border-b border-slate-100 bg-slate-50 overflow-x-auto">
-          <ToolButton onClick={() => execCmd('formatBlock', 'H1')} icon={<Heading1 size={18} />} title="一级标题" />
-          <ToolButton onClick={() => execCmd('formatBlock', 'H2')} icon={<Heading2 size={18} />} title="二级标题" />
-          <ToolButton onClick={() => execCmd('formatBlock', 'H3')} icon={<Heading3 size={18} />} title="三级标题" />
-          <div className="w-px h-6 bg-slate-200 mx-2"></div>
-          <ToolButton onClick={() => execCmd('bold')} icon={<Bold size={18} />} title="加粗" />
-          <ToolButton onClick={() => execCmd('backColor', 'yellow')} icon={<Highlighter size={18} />} title="高亮" />
-          <div className="w-px h-6 bg-slate-200 mx-2"></div>
-          <ToolButton onClick={() => execCmd('insertOrderedList')} icon={<ListOrdered size={18} />} title="数字列表" />
-          <ToolButton onClick={insertCheckbox} icon={<CheckSquare size={18} />} title="复选框" />
-          <div className="w-px h-6 bg-slate-200 mx-2"></div>
+          <ToolButton onClick={() => toggleHeading('h1')} icon={<Heading1 size={16} />} title="标题1" />
+          <ToolButton onClick={() => toggleHeading('h2')} icon={<Heading2 size={16} />} title="标题2" />
+          <ToolButton onClick={() => toggleHeading('h3')} icon={<Heading3 size={16} />} title="标题3" />
+          <div className="w-px h-4 bg-slate-200 mx-2"></div>
+          <ToolButton onClick={() => handleLineFormat('bold')} icon={<Bold size={16} />} title="加粗" />
+          <ToolButton onClick={() => handleLineFormat('backColor', 'yellow')} icon={<Highlighter size={16} />} title="高亮" />
+          <div className="w-px h-4 bg-slate-200 mx-2"></div>
+          <ToolButton onClick={toggleCheckboxLine} icon={<CheckSquare size={16} />} title="复选框" />
           <label className="p-2 text-slate-600 hover:text-slate-900 hover:bg-white cursor-pointer rounded-sm">
-             <ImageIcon size={18} />
+             <ImageIcon size={16} />
              <input type="file" ref={fileInputRef} onChange={insertImage} accept="image/*" className="hidden" />
           </label>
         </div>
 
         {/* Editor Area */}
-        <div className="flex-1 overflow-y-auto p-8 custom-scrollbar bg-white">
+        <div className="flex-1 overflow-y-auto p-4 custom-scrollbar bg-white">
            <div 
              ref={editorRef}
-             className="prose prose-slate max-w-3xl mx-auto focus:outline-none min-h-[50vh]"
+             className="prose prose-sm prose-slate max-w-3xl mx-auto focus:outline-none min-h-[50vh]"
              contentEditable
              onKeyDown={handleKeyDown}
-             onInput={handleSave} // Auto save on input
+             onInput={handleSave}
              onBlur={handleSave}
-             style={{ whiteSpace: 'pre-wrap' }}
+             style={{ whiteSpace: 'pre-wrap', lineHeight: '1.5' }}
            />
         </div>
       </div>
@@ -282,7 +391,7 @@ export const NoteTool: React.FC = () => {
     <div className="h-full flex flex-col bg-gray-50">
        
        {/* Top Bar: Categories */}
-       <div className="bg-white border-b border-gray-200 px-4 py-3 flex items-center justify-between sticky top-0 z-10 shadow-sm">
+       <div className="bg-white border-b border-gray-200 px-4 py-2 flex items-center justify-between sticky top-0 z-10 shadow-sm">
           <div className="flex-1 overflow-x-auto no-scrollbar flex items-center gap-2 pr-4">
              {categories.map(cat => (
                <button
@@ -291,7 +400,7 @@ export const NoteTool: React.FC = () => {
                  onPointerUp={() => { cancelCategoryPress(); handleCategoryClick(cat.id); }}
                  onPointerLeave={cancelCategoryPress}
                  onContextMenu={(e) => e.preventDefault()}
-                 className={`px-4 py-1.5 rounded-full text-xs font-bold transition-all whitespace-nowrap ${selectedCategoryId === cat.id ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}
+                 className={`px-3 py-1 rounded-full text-[10px] font-bold transition-all whitespace-nowrap ${selectedCategoryId === cat.id ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}
                >
                  {cat.name}
                </button>
@@ -299,59 +408,59 @@ export const NoteTool: React.FC = () => {
           </div>
           <button 
             onClick={handleCreateCategory}
-            className="p-2 bg-slate-100 hover:bg-slate-200 rounded-full text-slate-700 shrink-0"
+            className="p-1.5 bg-slate-100 hover:bg-slate-200 rounded-full text-slate-700 shrink-0"
             title="添加分类"
           >
-            <FolderPlus size={16} />
+            <FolderPlus size={14} />
           </button>
        </div>
 
        {/* Main Content */}
-       <div className="flex-1 overflow-y-auto p-6 md:p-8">
-         <div className="flex justify-between items-end mb-6">
+       <div className="flex-1 overflow-y-auto p-4">
+         <div className="flex justify-between items-end mb-4">
             <div>
-               <h2 className="text-3xl font-black text-slate-900 tracking-tight uppercase">灵感便签</h2>
-               <p className="text-xs text-slate-400 mt-1 font-mono">{filteredNotes.length} 条笔记</p>
+               <h2 className="text-xl font-black text-slate-900 tracking-tight uppercase">灵感便签</h2>
+               <p className="text-[10px] text-slate-400 mt-0.5 font-mono">{filteredNotes.length} 条笔记</p>
             </div>
             <button 
               onClick={handleCreateNote}
-              className="flex items-center gap-2 bg-slate-900 text-white px-5 py-2.5 font-bold uppercase tracking-wider hover:bg-slate-700 transition-colors rounded-none shadow-lg active:translate-y-0.5"
+              className="flex items-center gap-1 bg-slate-900 text-white px-3 py-1.5 text-xs font-bold uppercase tracking-wider hover:bg-slate-700 transition-colors rounded-none shadow-lg active:translate-y-0.5"
             >
-              <Plus size={18} /> 新建便签
+              <Plus size={14} /> 新建
             </button>
          </div>
 
          {filteredNotes.length === 0 ? (
-           <div className="flex flex-col items-center justify-center h-64 text-slate-400 border-2 border-dashed border-slate-200 bg-white/50">
-             <StickyNote size={48} className="mb-4 opacity-20" />
-             <p className="font-bold">此分类暂无便签</p>
+           <div className="flex flex-col items-center justify-center h-48 text-slate-400 border-2 border-dashed border-slate-200 bg-white/50">
+             <StickyNote size={32} className="mb-2 opacity-20" />
+             <p className="font-bold text-xs">此分类暂无便签</p>
            </div>
          ) : (
-           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
              {filteredNotes.map(note => (
                <div 
                  key={note.id}
                  onClick={() => setSelectedNoteId(note.id)}
-                 className="bg-white p-6 shadow-sm hover:shadow-xl transition-all cursor-pointer border border-slate-100 group flex flex-col h-56 rounded-none relative hover:-translate-y-1"
+                 className="bg-white p-4 shadow-sm hover:shadow-xl transition-all cursor-pointer border border-slate-100 group flex flex-col h-40 rounded-none relative hover:-translate-y-0.5"
                >
-                 <div className="flex justify-between items-start mb-4">
-                   <h3 className="font-bold text-lg text-slate-900 truncate pr-4">{note.title}</h3>
+                 <div className="flex justify-between items-start mb-2">
+                   <h3 className="font-bold text-sm text-slate-900 truncate pr-4">{note.title}</h3>
                    <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                       <button 
                         onClick={(e) => handleDeleteNote(e, note.id)}
                         className="p-1 text-slate-300 hover:text-red-500 transition-colors"
                       >
-                        <Trash2 size={14} />
+                        <Trash2 size={12} />
                       </button>
                    </div>
                  </div>
-                 <div className="flex-1 overflow-hidden text-sm text-slate-500 opacity-70 mask-image-b leading-relaxed">
+                 <div className="flex-1 overflow-hidden text-xs text-slate-500 opacity-70 mask-image-b leading-relaxed">
                     {/* Strip tags for preview, simplify text */}
-                    {note.content.replace(/<[^>]+>/g, ' ').slice(0, 100) || '无内容'}
+                    {note.content.replace(/<[^>]+>/g, ' ').slice(0, 80) || '无内容'}
                  </div>
-                 <div className="mt-4 pt-4 border-t border-slate-50 flex justify-between items-center text-[10px] text-slate-400 font-mono uppercase">
+                 <div className="mt-2 pt-2 border-t border-slate-50 flex justify-between items-center text-[10px] text-slate-400 font-mono uppercase">
                    <span>{new Date(note.updatedAt).toLocaleDateString()}</span>
-                   <span className="bg-slate-100 px-2 py-0.5 rounded-sm">{categories.find(c => c.id === note.categoryId)?.name || '未知'}</span>
+                   <span className="bg-slate-100 px-1.5 py-0.5 rounded-sm">{categories.find(c => c.id === note.categoryId)?.name || '未知'}</span>
                  </div>
                </div>
              ))}

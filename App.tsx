@@ -4,8 +4,7 @@ import { PhotoModal } from './components/PhotoModal';
 import { ColorTool } from './components/ColorTool';
 import { NoteTool } from './components/NoteTool';
 import { Photo, Category, ThemeColor, ColorGroup } from './types';
-import { analyzeImage, fileToGenerativePart } from './services/geminiService';
-import { Search, Upload, ImagePlus, Menu, Edit2, Trash2, LayoutGrid, Grid3x3, Square, Folder, ChevronRight, Image as ImageIcon, Check, Loader2, Clock, Sparkles, X, CheckSquare, MousePointer2 } from 'lucide-react';
+import { Search, Upload, ImagePlus, Menu, Edit2, Trash2, LayoutGrid, Grid3x3, Square, Folder, ChevronRight, Image as ImageIcon, Check, Loader2, Clock, Sparkles, X, CheckSquare, MousePointer2, Move, Tag } from 'lucide-react';
 
 // Initial Dummy Data
 const INITIAL_CATEGORIES: Category[] = [
@@ -222,14 +221,92 @@ const App: React.FC = () => {
 
   const isToolView = selectedCategory.startsWith('tool-');
 
+  // New unified processor for single or multiple files
+  const handleBatchFileProcess = async (files: File[]) => {
+      if (files.length === 0) return;
+
+      const newPhotosToState: Photo[] = [];
+      
+      for (const file of files) {
+          const objectUrl = URL.createObjectURL(file);
+          const newPhotoId = crypto.randomUUID();
+          
+          // Use filename as title, remove extension
+          const title = file.name.replace(/\.[^/.]+$/, "");
+
+          const newPhoto: Photo = {
+            id: newPhotoId,
+            url: objectUrl,
+            title: title,
+            description: '',
+            tags: [],
+            categoryId: 'uncategorized',
+            createdAt: Date.now(),
+            isAnalyzing: false // No AI analysis
+          };
+          newPhotosToState.push(newPhoto);
+      }
+
+      setPhotos(prev => [...newPhotosToState, ...prev]);
+  };
+
   // Startup Effect
   useEffect(() => {
     // Simulate loading resources or checking auth
     const timer = setTimeout(() => {
       setIsLoading(false);
     }, 800); // 800ms loading simulation
+
+    // PWA Launch Queue for Android Share Target
+    if ('launchQueue' in window) {
+      (window as any).launchQueue.setConsumer(async (launchParams: any) => {
+        if (!launchParams.files || !launchParams.files.length) return;
+        
+        const files: File[] = [];
+        for (const handle of launchParams.files) {
+          if (handle.kind === 'file') {
+             const file = await handle.getFile();
+             files.push(file);
+          }
+        }
+        
+        // Handle imported files
+        if (files.length > 0) {
+            await handleBatchFileProcess(files);
+        }
+      });
+    }
+
     return () => clearTimeout(timer);
   }, []);
+
+  // --- HISTORY API HANDLER for Mobile Back Gesture ---
+  useEffect(() => {
+    const handlePopState = (e: PopStateEvent) => {
+      // Prioritize closing the deepest nested modal/view
+      if (selectedPhoto) {
+        setSelectedPhoto(null);
+      } else if (isSettingsOpen) {
+        setIsSettingsOpen(false);
+      } else if (isSidebarOpen) {
+        setIsSidebarOpen(false);
+      } else if (isSelectionMode) {
+        setIsSelectionMode(false);
+        setSelectedIds(new Set());
+      }
+    };
+
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, [selectedPhoto, isSettingsOpen, isSidebarOpen, isSelectionMode]);
+
+  // Push state when opening modals
+  useEffect(() => {
+    if (selectedPhoto || isSettingsOpen || isSidebarOpen) {
+      window.history.pushState({ modalOpen: true }, '', window.location.href);
+    }
+  }, [selectedPhoto, isSettingsOpen, isSidebarOpen]);
+
 
   useEffect(() => {
     localStorage.setItem('theme_color', themeColor);
@@ -359,70 +436,17 @@ const App: React.FC = () => {
   const handleUploadClick = () => {
     fileInputRef.current?.click();
   };
-
+  
   const handleFileChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
-
-    const objectUrl = URL.createObjectURL(file);
-    const newPhotoId = crypto.randomUUID();
+    const fileList = event.target.files;
+    if (!fileList || fileList.length === 0) return;
     
-    // Create preliminary photo object
-    const newPhoto: Photo = {
-      id: newPhotoId,
-      url: objectUrl,
-      title: 'AI 识别中...',
-      description: '',
-      tags: [],
-      categoryId: 'uncategorized',
-      createdAt: Date.now(),
-      isAnalyzing: true // Start analysis mode
-    };
-
-    setPhotos(prev => [newPhoto, ...prev]);
-    // Optional: open modal immediately or wait. Let's wait on list to show loading state.
+    // Convert FileList to Array
+    const files = Array.from(fileList) as File[];
     
+    await handleBatchFileProcess(files);
+
     if (fileInputRef.current) fileInputRef.current.value = '';
-
-    // --- AI ANALYSIS START ---
-    try {
-      // 1. Convert to Base64
-      const base64Data = await fileToGenerativePart(file);
-      
-      // 2. Get available categories for context
-      const categorySlugs = categories.map(c => c.slug).filter(s => s !== 'uncategorized');
-      
-      // 3. Call Gemini
-      const analysis = await analyzeImage(base64Data, categorySlugs);
-      
-      // 4. Update Photo with AI results
-      setPhotos(prev => prev.map(p => {
-        if (p.id === newPhotoId) {
-          // Map suggested slug back to ID
-          const matchedCategory = categories.find(c => c.slug === analysis.suggestedCategorySlug);
-          
-          return {
-            ...p,
-            title: analysis.title,
-            description: analysis.description,
-            tags: analysis.tags,
-            categoryId: matchedCategory ? matchedCategory.id : 'uncategorized',
-            isAnalyzing: false
-          };
-        }
-        return p;
-      }));
-      
-    } catch (error) {
-      console.error("Failed to analyze image:", error);
-      // Fallback update on error
-      setPhotos(prev => prev.map(p => {
-        if (p.id === newPhotoId) {
-           return { ...p, title: '未命名照片', isAnalyzing: false };
-        }
-        return p;
-      }));
-    }
   };
 
   const handleUpdatePhoto = (updatedPhoto: Photo) => {
@@ -455,6 +479,40 @@ const App: React.FC = () => {
     } else {
       setBatchDeleteConfirm(true);
     }
+  };
+  
+  const handleBatchMove = () => {
+    if (selectedIds.size === 0) return;
+    const catName = prompt("请输入要移动到的相册名称 (如果不匹配将移至'未分类')");
+    if (!catName) return;
+    
+    const targetCat = categories.find(c => c.name === catName);
+    const targetId = targetCat ? targetCat.id : 'uncategorized';
+    
+    setPhotos(prev => prev.map(p => selectedIds.has(p.id) ? { ...p, categoryId: targetId } : p));
+    setIsSelectionMode(false);
+    setSelectedIds(new Set());
+    alert(`已将 ${selectedIds.size} 张照片移动到 ${targetCat ? targetCat.name : '未分类'}`);
+  };
+
+  const handleBatchTag = () => {
+    if (selectedIds.size === 0) return;
+    const tagsStr = prompt("请输入标签 (用逗号分隔)");
+    if (!tagsStr) return;
+    
+    const newTags = tagsStr.split(/[,，]/).map(t => t.trim()).filter(Boolean);
+    if (newTags.length === 0) return;
+
+    setPhotos(prev => prev.map(p => {
+        if (selectedIds.has(p.id)) {
+            const mergedTags = Array.from(new Set([...p.tags, ...newTags]));
+            return { ...p, tags: mergedTags };
+        }
+        return p;
+    }));
+    setIsSelectionMode(false);
+    setSelectedIds(new Set());
+    alert(`已为 ${selectedIds.size} 张照片添加标签`);
   };
 
   const handleSelectAll = () => {
@@ -546,7 +604,13 @@ const App: React.FC = () => {
     
     longPressTimer.current = setTimeout(() => {
       isLongPress.current = true;
-      setContextMenuPhoto(photo);
+      if (!isSelectionMode) {
+          // On long press, just enter selection mode with item selected instead of context menu
+          setIsSelectionMode(true);
+          setSelectedIds(new Set([photo.id]));
+          // Optional: Vibrate
+          if (navigator.vibrate) navigator.vibrate(50);
+      }
     }, 600);
   };
 
@@ -558,9 +622,8 @@ const App: React.FC = () => {
   };
 
   const handleGridItemClick = (photo: Photo) => {
-    // Allow click to pass through if in selection mode, ignoring previous long press flags
-    // otherwise respect long press flag to prevent opening modal after context menu triggers
-    if (!isSelectionMode && isLongPress.current) return;
+    // If long press triggered selection mode, don't process click
+    if (isLongPress.current) return;
     
     if (isSelectionMode) {
       const newSet = new Set(selectedIds);
@@ -570,6 +633,7 @@ const App: React.FC = () => {
         newSet.add(photo.id);
       }
       setSelectedIds(newSet);
+      if (newSet.size === 0) setIsSelectionMode(false); // Auto exit if none selected
     } else {
       setInitialEditMode(false);
       setSelectedPhoto(photo);
@@ -609,78 +673,26 @@ const App: React.FC = () => {
   // Theme Helpers
   const getButtonColor = () => {
     switch (themeColor) {
-      case 'blue': return 'bg-blue-600 hover:bg-blue-700';
-      case 'indigo': return 'bg-indigo-600 hover:bg-indigo-700';
-      case 'rose': return 'bg-rose-600 hover:bg-rose-700';
-      case 'orange': return 'bg-orange-600 hover:bg-orange-700';
-      case 'emerald': return 'bg-emerald-600 hover:bg-emerald-700';
-      case 'cyan': return 'bg-cyan-600 hover:bg-cyan-700';
-      case 'violet': return 'bg-violet-600 hover:bg-violet-700';
-      case 'fuchsia': return 'bg-fuchsia-600 hover:bg-fuchsia-700';
-      case 'lime': return 'bg-lime-600 hover:bg-lime-700';
-      case 'amber': return 'bg-amber-600 hover:bg-amber-700';
-      case 'teal': return 'bg-teal-600 hover:bg-teal-700';
-      case 'sky': return 'bg-sky-600 hover:bg-sky-700';
-      default: return 'bg-slate-900 hover:bg-slate-800';
+        case 'zinc': return 'bg-slate-900 text-white hover:bg-slate-800';
+        default: return `bg-${themeColor}-600 text-white hover:bg-${themeColor}-700`;
     }
   };
 
-  const getFocusColor = () => {
-    switch (themeColor) {
-      case 'blue': return 'focus:border-blue-600';
-      case 'indigo': return 'focus:border-indigo-600';
-      case 'rose': return 'focus:border-rose-600';
-      case 'orange': return 'focus:border-orange-600';
-      case 'emerald': return 'focus:border-emerald-600';
-      case 'cyan': return 'focus:border-cyan-600';
-      case 'violet': return 'focus:border-violet-600';
-      case 'fuchsia': return 'focus:border-fuchsia-600';
-      case 'lime': return 'focus:border-lime-600';
-      case 'amber': return 'focus:border-amber-600';
-      case 'teal': return 'focus:border-teal-600';
-      case 'sky': return 'focus:border-sky-600';
-      default: return 'focus:border-slate-900';
-    }
-  };
-  
-  const getTextThemeColor = () => {
-     switch (themeColor) {
-      case 'blue': return 'text-blue-600';
-      case 'indigo': return 'text-indigo-600';
-      case 'rose': return 'text-rose-600';
-      case 'orange': return 'text-orange-600';
-      case 'emerald': return 'text-emerald-600';
-      case 'cyan': return 'text-cyan-600';
-      case 'violet': return 'text-violet-600';
-      case 'fuchsia': return 'text-fuchsia-600';
-      case 'lime': return 'text-lime-600';
-      case 'amber': return 'text-amber-600';
-      case 'teal': return 'text-teal-600';
-      case 'sky': return 'text-sky-600';
-      default: return 'text-slate-900';
-    }
-  };
+  // --- Render ---
 
-  // --- Loading Screen ---
   if (isLoading) {
     return (
-      <div className="flex h-screen items-center justify-center bg-gray-50 flex-col gap-4">
-        <div className="relative">
-          <div className="w-12 h-12 border-4 border-slate-200 border-t-slate-900 rounded-full animate-spin"></div>
-          <div className="absolute inset-0 flex items-center justify-center">
-             <ImageIcon size={16} className="text-slate-900" />
-          </div>
-        </div>
-        <p className="text-sm font-bold text-slate-400 uppercase tracking-widest animate-pulse">加载中...</p>
+      <div className="h-screen w-full flex items-center justify-center bg-gray-50 flex-col gap-4">
+        <div className={`w-12 h-12 rounded-full border-4 border-slate-200 border-t-slate-900 animate-spin`}></div>
+        <p className="text-sm font-bold text-slate-400 uppercase tracking-widest animate-pulse">Loading Gallery...</p>
       </div>
     );
   }
 
   return (
-    // Immersive Gradient Background with Sharp Edges & Safe Areas
-    <div className="flex h-screen bg-gradient-to-br from-indigo-50/50 via-white to-white overflow-hidden font-sans select-none text-slate-900">
-      {/* Sidebar */}
-      <Sidebar 
+    <div className="flex h-screen bg-gray-50 overflow-hidden text-slate-900 font-sans">
+      
+      <Sidebar
         categories={categories}
         groupedTags={groupedTags}
         selectedCategory={selectedCategory}
@@ -699,302 +711,213 @@ const App: React.FC = () => {
       />
 
       {/* Main Content */}
-      <main className="flex-1 flex flex-col min-w-0 pt-safe pb-safe">
+      <main className="flex-1 flex flex-col h-full overflow-hidden w-full relative transition-all duration-300">
         
-        {/* Top Header - Glass Effect, Sharp borders */}
-        <header className="bg-white/70 backdrop-blur-md border-b border-white/50 sticky top-0 z-30 px-6 py-4 flex items-center justify-between flex-shrink-0 gap-4 transition-all">
-          <button 
-            className="md:hidden p-2 -ml-2 text-slate-600 hover:bg-slate-100/50"
-            onClick={() => setIsSidebarOpen(true)}
-          >
-            <Menu size={24} />
-          </button>
+        {/* Header */}
+        <header className="bg-white/80 backdrop-blur-md border-b border-slate-200 sticky top-0 z-30 pt-safe">
+          <div className="flex items-center justify-between px-4 py-3 md:px-6 md:py-4">
+            <div className="flex items-center gap-3 md:hidden">
+              <button onClick={() => setIsSidebarOpen(true)} className="p-1 -ml-1 text-slate-600">
+                <Menu size={24} />
+              </button>
+            </div>
 
-          {/* Conditional Header Content */}
-          {isToolView ? (
-             <h1 className="text-xl font-bold text-slate-900 ml-2 tracking-tight uppercase whitespace-nowrap">{getPageTitle()}</h1>
-          ) : (
-            <>
-              {isSelectionMode ? (
-                 <div className="flex-1 flex items-center gap-4 animate-fade-in">
-                    <span className="font-bold text-slate-700 whitespace-nowrap">已选择 {selectedIds.size} 项</span>
-                     <button 
-                       onClick={handleSelectAll}
-                       className="text-xs uppercase font-bold text-slate-400 hover:text-slate-900 whitespace-nowrap"
-                    >
-                       全选
-                    </button>
-                    <button 
-                       onClick={() => { setIsSelectionMode(false); setSelectedIds(new Set()); setBatchDeleteConfirm(false); }}
-                       className="text-xs uppercase font-bold text-slate-400 hover:text-slate-900 whitespace-nowrap"
-                    >
-                       取消
-                    </button>
+            <div className="flex-1 px-4 md:px-0 flex justify-center md:justify-start">
+               {isSearchFocused ? (
+                 <div className="w-full max-w-md relative group">
+                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 group-focus-within:text-slate-900 transition-colors" size={18} />
+                    <input 
+                      type="text" 
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                      onKeyDown={(e) => e.key === 'Enter' && handleSearchSubmit(searchQuery)}
+                      placeholder="搜索照片、标签、描述..."
+                      className="w-full bg-slate-100 border-none rounded-full pl-10 pr-10 py-2.5 text-sm focus:ring-2 focus:ring-slate-900 focus:bg-white transition-all outline-none"
+                      autoFocus
+                    />
+                     {searchQuery && (
+                      <button 
+                        onClick={() => {setSearchQuery(''); setIsSearchFocused(false);}} 
+                        className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+                      >
+                        <X size={16} />
+                      </button>
+                    )}
                  </div>
-              ) : (
-                <div className="flex-1 max-w-lg relative group">
-                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 group-focus-within:text-slate-900 transition-colors" size={16} />
-                  <input 
-                    type="text"
-                    placeholder="搜索记忆..."
-                    value={searchQuery}
-                    onFocus={() => setIsSearchFocused(true)}
-                    onBlur={() => setTimeout(() => setIsSearchFocused(false), 200)} // Delay to allow click on history items
-                    onChange={(e) => setSearchQuery(e.target.value)}
-                    onKeyDown={(e) => e.key === 'Enter' && handleSearchSubmit(searchQuery)}
-                    className={`w-full bg-slate-100 hover:bg-white focus:bg-white border border-transparent ${getFocusColor()} py-2 pl-10 pr-4 text-sm focus:ring-0 transition-all outline-none rounded-none placeholder:text-slate-400`}
-                  />
-                  
-                  {/* Recent Searches Overlay */}
-                  {isSearchFocused && !searchQuery && recentSearches.length > 0 && (
-                    <div className="absolute top-full left-0 right-0 bg-white border border-slate-200 mt-1 shadow-lg z-50 animate-in fade-in zoom-in-95 duration-100 rounded-none">
-                      <div className="p-2 border-b border-slate-50 bg-slate-50 text-[10px] font-bold text-slate-400 uppercase tracking-widest flex items-center gap-1">
-                          <Clock size={10} /> 最近搜索
-                      </div>
-                      {recentSearches.map(term => (
-                        <button
-                          key={term}
-                          onClick={() => handleSearchSubmit(term)}
-                          className="w-full text-left px-4 py-3 text-sm text-slate-700 hover:bg-slate-50 border-b border-slate-50 last:border-0 whitespace-nowrap"
-                        >
-                          {term}
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              )}
-              
-              <div className="flex items-center gap-3">
-                {!isSelectionMode && (
-                   <button 
-                    onClick={() => setIsSelectionMode(true)}
-                    className="p-2 text-slate-500 hover:text-slate-900 hover:bg-slate-100 transition-colors rounded-none"
-                    title="批量管理"
-                  >
-                    <CheckSquare size={20} />
-                  </button>
-                )}
+               ) : (
+                 <div className="flex items-center gap-2 w-full md:w-auto overflow-hidden">
+                    <h2 className="text-lg md:text-2xl font-black text-slate-900 truncate tracking-tight uppercase">
+                      {getPageTitle()}
+                    </h2>
+                    {!isToolView && (
+                      <button onClick={() => setIsSearchFocused(true)} className="md:hidden ml-auto p-2 text-slate-500">
+                        <Search size={20} />
+                      </button>
+                    )}
+                 </div>
+               )}
+            </div>
 
-                <input 
-                  type="file" 
-                  ref={fileInputRef} 
-                  onChange={handleFileChange} 
-                  accept="image/*" 
-                  className="hidden" 
-                />
-                {!isSelectionMode && (
-                  <button 
-                    onClick={handleUploadClick}
-                    className={`flex items-center gap-2 ${getButtonColor()} text-white px-5 py-2 text-sm font-bold transition-all shadow-sm active:translate-y-0.5 rounded-none tracking-wide whitespace-nowrap`}
-                  >
-                    <Upload size={16} />
-                    <span className="hidden sm:inline">上传</span>
-                  </button>
-                )}
-                
-                {isSelectionMode && (
-                  <button 
-                    onClick={handleBatchDelete}
-                    disabled={selectedIds.size === 0}
-                    className={`flex items-center gap-2 ${batchDeleteConfirm ? 'bg-red-600 hover:bg-red-700' : 'bg-rose-50 text-rose-600 hover:bg-rose-100'} px-5 py-2 text-sm font-bold transition-all shadow-sm active:translate-y-0.5 rounded-none tracking-wide whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed`}
-                  >
-                    <Trash2 size={16} className={batchDeleteConfirm ? "text-white" : "text-rose-600"}/>
-                    <span className={batchDeleteConfirm ? "text-white" : ""}>
-                       {batchDeleteConfirm ? '确认删除?' : (selectedCategory === 'favorites' ? '取消收藏' : '删除选中')}
-                    </span>
-                  </button>
-                )}
-              </div>
-            </>
+            <div className="flex items-center gap-2 md:gap-4 shrink-0">
+               {!isToolView && (
+                 <>
+                   {/* Selection Mode Toggle */}
+                   <button 
+                     onClick={() => {
+                        setIsSelectionMode(!isSelectionMode);
+                        setSelectedIds(new Set());
+                     }}
+                     className={`p-2 rounded-full transition-all ${isSelectionMode ? 'bg-black text-white' : 'text-slate-500 hover:bg-slate-100'}`}
+                     title="批量选择"
+                   >
+                     <CheckSquare size={20} />
+                   </button>
+                   
+                   {/* Desktop Search Trigger */}
+                   <div className="hidden md:block relative">
+                       <button onClick={() => setIsSearchFocused(true)} className="p-2 text-slate-500 hover:bg-slate-100 rounded-full transition-colors">
+                         <Search size={20} />
+                       </button>
+                   </div>
+                   
+                   <div className="hidden md:flex bg-slate-100 rounded-lg p-1 items-center gap-1">
+                      <button onClick={() => setGridSize('small')} className={`p-1.5 rounded-md ${gridSize === 'small' ? 'bg-white shadow-sm text-slate-900' : 'text-slate-400'}`}><Grid3x3 size={14}/></button>
+                      <button onClick={() => setGridSize('medium')} className={`p-1.5 rounded-md ${gridSize === 'medium' ? 'bg-white shadow-sm text-slate-900' : 'text-slate-400'}`}><LayoutGrid size={14}/></button>
+                      <button onClick={() => setGridSize('large')} className={`p-1.5 rounded-md ${gridSize === 'large' ? 'bg-white shadow-sm text-slate-900' : 'text-slate-400'}`}><Square size={14}/></button>
+                   </div>
+                   <input 
+                      type="file" 
+                      ref={fileInputRef} 
+                      onChange={handleFileChange} 
+                      className="hidden" 
+                      accept="image/*"
+                      multiple 
+                   />
+                   <button 
+                      onClick={handleUploadClick}
+                      className={`flex items-center gap-2 px-4 py-2 text-sm font-bold uppercase tracking-wider rounded-none shadow-lg hover:shadow-xl transition-all active:translate-y-0.5 ${getButtonColor()}`}
+                   >
+                      <Upload size={16} strokeWidth={2.5} />
+                      <span className="hidden md:inline">上传</span>
+                   </button>
+                 </>
+               )}
+            </div>
+          </div>
+          
+          {/* Quick Filters / Search History when focused */}
+          {isSearchFocused && recentSearches.length > 0 && !searchQuery && (
+             <div className="absolute top-full left-0 right-0 bg-white border-b border-slate-200 p-4 shadow-lg animate-fade-in z-20">
+               <div className="flex items-center gap-2 mb-2 text-xs font-bold text-slate-400 uppercase tracking-widest">
+                 <Clock size={12} /> 最近搜索
+               </div>
+               <div className="flex flex-wrap gap-2">
+                 {recentSearches.map(term => (
+                   <button 
+                     key={term}
+                     onClick={() => handleSearchSubmit(term)}
+                     className="px-3 py-1 bg-slate-100 hover:bg-slate-200 rounded-full text-xs text-slate-700 transition-colors"
+                   >
+                     {term}
+                   </button>
+                 ))}
+               </div>
+             </div>
           )}
         </header>
 
         {/* Content Area */}
         {selectedCategory === 'tool-color' ? (
-          <ColorTool groups={colorGroups} onUpdateGroups={setColorGroups} />
+           <ColorTool groups={colorGroups} onUpdateGroups={setColorGroups} />
         ) : selectedCategory === 'tool-note' ? (
-          <NoteTool />
+           <NoteTool />
         ) : (
-          /* Gallery Grid */
-          <div className="flex-1 overflow-y-auto p-4 md:px-8 md:py-6 custom-scrollbar pb-24">
-            {/* Header Row: Title on Left, Layout Controls on Right (Bottom Aligned) */}
-            <div className="mb-8 flex flex-row items-end justify-between border-b border-slate-200 pb-4">
-              <div>
-                <h2 className="text-3xl font-black text-slate-900 tracking-tight uppercase leading-none whitespace-nowrap">
-                  {getPageTitle()}
-                </h2>
-                <p className="text-slate-500 text-xs mt-1.5 font-mono whitespace-nowrap">
-                  {filteredPhotos.length} 张照片
-                </p>
-              </div>
-
-              {/* Layout Controls - Hard Rectangles */}
-              {!isSelectionMode && (
-                <div className="flex items-center gap-1">
-                  <button 
-                    onClick={() => setGridSize('large')}
-                    className={`p-2 transition-all border border-transparent ${gridSize === 'large' ? 'bg-slate-900 text-white' : 'text-slate-400 hover:text-slate-900 hover:border-slate-300'} rounded-none`}
-                    title="大图"
-                  >
-                    <Square size={18} />
-                  </button>
-                  <button 
-                    onClick={() => setGridSize('medium')}
-                    className={`p-2 transition-all border border-transparent ${gridSize === 'medium' ? 'bg-slate-900 text-white' : 'text-slate-400 hover:text-slate-900 hover:border-slate-300'} rounded-none`}
-                    title="中图"
-                  >
-                    <LayoutGrid size={18} />
-                  </button>
-                  <button 
-                    onClick={() => setGridSize('small')}
-                    className={`p-2 transition-all border border-transparent ${gridSize === 'small' ? 'bg-slate-900 text-white' : 'text-slate-400 hover:text-slate-900 hover:border-slate-300'} rounded-none`}
-                    title="小图"
-                  >
-                    <Grid3x3 size={18} />
-                  </button>
-                </div>
-              )}
-            </div>
+          <div className="flex-1 overflow-y-auto p-2 md:p-6 pb-24 md:pb-6 custom-scrollbar">
             
-            {/* Albums/Folders Grid View with Thumbnails */}
-            {selectedCategory === 'all' && !searchQuery && !isSelectionMode && (
-              <div className="mb-12 animate-fade-in">
-                <h3 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-5 whitespace-nowrap">相册分类</h3>
-                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-6">
-                  {categories.map(category => {
-                    const categoryPhotos = photos.filter(p => p.categoryId === category.id);
-                    const count = categoryPhotos.length;
-                    const previews = categoryPhotos.slice(0, 4);
-
-                    return (
-                      <button 
-                        key={category.id}
-                        onClick={() => setSelectedCategory(category.id)}
-                        className="group flex flex-col gap-3 text-left"
-                      >
-                         {/* Folder Preview Card - Hard edges */}
-                         <div className={`
-                            relative w-full aspect-square overflow-hidden
-                            border border-slate-200 group-hover:border-slate-900 transition-colors duration-200
-                            ${previews.length === 0 ? 'bg-slate-50 flex items-center justify-center' : 'bg-white'}
-                            rounded-none
-                         `}>
-                           {previews.length === 0 ? (
-                             <Folder size={32} className={`text-slate-300 group-hover:opacity-80 transition-colors ${getTextThemeColor()}`} />
-                           ) : (
-                             // 2x2 Grid for thumbnails
-                             <div className="grid grid-cols-2 grid-rows-2 w-full h-full gap-px bg-slate-100 border-collapse">
-                                {previews.map((p, idx) => (
-                                  <div key={p.id} className={`relative overflow-hidden ${previews.length === 1 ? 'col-span-2 row-span-2' : ''} ${previews.length === 3 && idx === 0 ? 'col-span-2' : ''} bg-white`}>
-                                     {failedImages.has(p.id) ? (
-                                        <div className="w-full h-full flex items-center justify-center bg-slate-100">
-                                           <ImageIcon size={20} className={getTextThemeColor()} />
-                                        </div>
-                                     ) : (
-                                       <img 
-                                         src={p.url} 
-                                         alt="" 
-                                         onError={() => handleImageError(p.id)}
-                                         className="w-full h-full object-cover opacity-90 group-hover:opacity-100 transition-opacity" 
-                                         loading="lazy" 
-                                       />
-                                     )}
-                                  </div>
-                                ))}
-                             </div>
-                           )}
-                         </div>
-
-                         {/* Label */}
-                         <div>
-                           <span className="block font-bold text-slate-800 text-sm truncate group-hover:text-indigo-600 transition-colors">
-                             {category.name}
-                           </span>
-                           <span className="text-[10px] text-slate-400 font-mono uppercase tracking-wider">{count} 张</span>
-                         </div>
-                      </button>
-                    );
-                  })}
-                </div>
+            {/* Selection Toolbar */}
+            {isSelectionMode && (
+              <div className="sticky top-0 z-20 mb-4 bg-slate-900 text-white p-3 shadow-md flex justify-between items-center rounded-none animate-in slide-in-from-top-2">
+                 <div className="flex items-center gap-4">
+                    <span className="font-bold text-sm ml-2">已选 {selectedIds.size} 项</span>
+                    <button onClick={handleSelectAll} className="text-xs border border-white/30 px-2 py-1 hover:bg-white/10 rounded-sm">
+                       {selectedIds.size === filteredPhotos.length ? '取消全选' : '全选'}
+                    </button>
+                 </div>
+                 <div className="flex gap-2">
+                    <button onClick={handleBatchMove} disabled={selectedIds.size === 0} className="p-2 hover:bg-white/20 rounded-sm" title="移动"><Folder size={18}/></button>
+                    <button onClick={handleBatchTag} disabled={selectedIds.size === 0} className="p-2 hover:bg-white/20 rounded-sm" title="标签"><Tag size={18}/></button>
+                    <button onClick={handleBatchDelete} disabled={selectedIds.size === 0} className="p-2 hover:bg-red-500/50 rounded-sm text-red-300" title="删除">
+                       {batchDeleteConfirm ? '确认?' : <Trash2 size={18}/>}
+                    </button>
+                    <button onClick={() => setIsSelectionMode(false)} className="ml-2 p-2 hover:bg-white/20 rounded-sm"><X size={18}/></button>
+                 </div>
               </div>
             )}
 
-            {filteredPhotos.length === 0 && searchQuery ? (
-               <div className="h-64 flex flex-col items-center justify-center text-slate-400">
-                  <p>未找到相关照片</p>
-               </div>
-            ) : filteredPhotos.length === 0 && selectedCategory !== 'all' ? (
-              <div className="h-64 flex flex-col items-center justify-center text-slate-400 border border-dashed border-slate-300 bg-slate-50/50 rounded-none">
-                <ImagePlus size={48} className="mb-4 opacity-20" />
-                <p className="font-bold text-slate-500">
-                   {selectedCategory === 'favorites' ? '暂无收藏' : '相册为空'}
-                </p>
-                <p className="text-xs mt-1 text-center px-4 uppercase tracking-wide">
-                   {selectedCategory === 'favorites' ? '去添加一些喜欢的照片吧' : '上传照片以开始'}
-                </p>
+            {filteredPhotos.length === 0 ? (
+              <div className="flex flex-col items-center justify-center h-64 text-slate-400 mt-10">
+                <ImagePlus size={48} strokeWidth={1} className="mb-4 text-slate-300" />
+                <p className="text-lg font-medium text-slate-500">这里空空如也</p>
+                <p className="text-sm mt-2">点击右上角上传按钮添加照片</p>
               </div>
             ) : (
-              // Grouped by Date Rendering
-              <div className="space-y-10">
-                {groupedPhotos.map(([dateStr, groupPhotos]) => (
-                   <div key={dateStr}>
-                      <h4 className="sticky top-0 bg-white/90 backdrop-blur-sm z-10 py-2 mb-4 text-sm font-bold text-slate-500 border-b border-slate-100 w-full whitespace-nowrap">
-                        {dateStr}
-                        <span className="ml-2 font-normal text-slate-300 text-xs">{groupPhotos.length} 张</span>
-                      </h4>
-                      <div className={`grid ${getGridClass()}`}>
-                        {groupPhotos.map((photo) => (
-                          <div 
-                            key={photo.id}
-                            onPointerDown={() => startPress(photo)}
-                            onPointerUp={() => { cancelPress(); handleGridItemClick(photo); }}
-                            onPointerLeave={cancelPress}
-                            onContextMenu={(e) => {
-                              e.preventDefault();
-                            }}
-                            className={`group relative aspect-square bg-slate-100 overflow-hidden cursor-pointer transition-all duration-200 rounded-none border ${isSelectionMode && selectedIds.has(photo.id) ? 'border-4 border-slate-900' : 'border-transparent hover:border-transparent'} ${!isSelectionMode ? 'hover:ring-2 hover:ring-slate-900 hover:ring-offset-2' : ''}`}
-                          >
-                            {failedImages.has(photo.id) ? (
-                              <div className="w-full h-full flex flex-col items-center justify-center bg-slate-100 p-4 text-center">
-                                <ImageIcon size={32} className={`mb-2 opacity-50 ${getTextThemeColor()}`} />
-                                <span className="text-[10px] text-slate-400">加载失败</span>
+              <div className="space-y-8">
+                {groupedPhotos.map(([date, groupPhotos]) => (
+                  <div key={date}>
+                    <h3 className="text-xs font-bold text-slate-400 mb-3 ml-1 sticky top-0 bg-gray-50/95 backdrop-blur-sm py-2 z-10 flex items-center gap-2 uppercase tracking-wider w-fit px-2 rounded-r-md">
+                       <div className="w-1.5 h-1.5 bg-slate-300 rounded-full"></div> {date}
+                    </h3>
+                    <div className={`grid ${getGridClass()}`}>
+                      {groupPhotos.map(photo => (
+                        <div 
+                          key={photo.id}
+                          className={`
+                            group relative aspect-square bg-slate-200 overflow-hidden cursor-pointer shadow-sm hover:shadow-md transition-all duration-300
+                            ${isSelectionMode && selectedIds.has(photo.id) ? 'ring-4 ring-slate-900 scale-95' : ''}
+                            ${!isSelectionMode && 'hover:scale-[1.02]'}
+                          `}
+                          onClick={() => handleGridItemClick(photo)}
+                          onPointerDown={() => startPress(photo)}
+                          onPointerUp={cancelPress}
+                          onPointerLeave={cancelPress}
+                          onContextMenu={(e) => e.preventDefault()}
+                        >
+                          {failedImages.has(photo.id) ? (
+                              <div className="w-full h-full flex flex-col items-center justify-center text-slate-400 bg-slate-100">
+                                  <ImageIcon size={24} />
+                                  <span className="text-[10px] mt-1">加载失败</span>
                               </div>
-                            ) : (
+                          ) : (
                               <img 
                                 src={photo.url} 
                                 alt={photo.title} 
-                                onError={() => handleImageError(photo.id)}
-                                className={`w-full h-full object-cover transition-transform duration-300 ${isSelectionMode && selectedIds.has(photo.id) ? 'scale-90 opacity-90' : 'scale-100'}`}
+                                className={`w-full h-full object-cover transition-transform duration-700 ${photo.isAnalyzing ? 'scale-110 blur-sm' : 'group-hover:scale-110'}`}
                                 loading="lazy"
+                                onError={() => handleImageError(photo.id)}
                               />
-                            )}
-                            
-                            {/* Selection Overlay */}
-                            {isSelectionMode && (
-                              <div className={`absolute top-2 right-2 w-6 h-6 rounded-full border-2 flex items-center justify-center transition-colors ${selectedIds.has(photo.id) ? `bg-slate-900 border-slate-900` : 'bg-black/30 border-white'}`}>
-                                 {selectedIds.has(photo.id) && <Check size={14} className="text-white" />}
-                              </div>
-                            )}
-
-                            {/* AI Analyzing Overlay */}
-                            {photo.isAnalyzing && (
-                              <div className="absolute inset-0 bg-black/40 backdrop-blur-[2px] flex flex-col items-center justify-center z-10">
-                                <Sparkles className="text-white animate-spin mb-1" size={24} />
-                                <span className="text-[10px] text-white font-bold uppercase tracking-wider animate-pulse">AI 分析中...</span>
-                              </div>
-                            )}
-
-                            {/* Immersive Overlay - Hard Style (Only show if not selecting) */}
-                            {!isSelectionMode && !photo.isAnalyzing && (
-                              <div className="absolute inset-x-0 bottom-0 bg-slate-900/90 py-2 px-3 translate-y-full group-hover:translate-y-0 transition-transform duration-200">
-                                <p className="text-white font-bold text-xs truncate uppercase tracking-wider">{photo.title}</p>
-                              </div>
-                            )}
+                          )}
+                          
+                          <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300">
+                             <div className="absolute bottom-0 left-0 right-0 p-3">
+                               <p className="text-white text-xs font-bold truncate">{photo.title}</p>
+                               <div className="flex gap-1 mt-1">
+                                 {photo.tags.slice(0, 3).map(tag => (
+                                   <span key={tag} className="text-[10px] text-white/80 bg-white/20 px-1.5 py-0.5 rounded-sm backdrop-blur-sm">#{tag}</span>
+                                 ))}
+                               </div>
+                             </div>
                           </div>
-                        ))}
-                      </div>
-                   </div>
+
+                          {/* Selection Checkbox */}
+                          {isSelectionMode && (
+                             <div className={`absolute top-2 right-2 w-6 h-6 rounded-full border-2 border-white flex items-center justify-center transition-colors ${selectedIds.has(photo.id) ? 'bg-slate-900 border-slate-900' : 'bg-black/30'}`}>
+                                {selectedIds.has(photo.id) && <Check size={14} className="text-white" />}
+                             </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
                 ))}
               </div>
             )}
@@ -1002,84 +925,35 @@ const App: React.FC = () => {
         )}
       </main>
 
-      {/* Context Menu Modal - Hard Edges */}
-      {contextMenuPhoto && (
-        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
-           <div className="bg-white w-full max-w-xs shadow-2xl p-0 animate-fade-in border border-slate-200 rounded-none">
-             <div className="p-4 border-b border-slate-100">
-                <h3 className="text-sm font-black text-slate-900 text-center uppercase tracking-widest whitespace-nowrap">操作</h3>
-             </div>
-             <div className="flex flex-col">
-               <button 
-                 onClick={handleEditFromContext}
-                 className="flex items-center justify-center gap-2 bg-white text-slate-700 py-4 font-medium hover:bg-slate-50 transition-colors border-b border-slate-100 rounded-none whitespace-nowrap"
-               >
-                 <Edit2 size={16} /> 编辑信息
-               </button>
-               <button 
-                 onClick={() => {
-                    if (contextMenuDeleteConfirm) {
-                       handleDeletePhoto(contextMenuPhoto.id);
-                    } else {
-                       setContextMenuDeleteConfirm(true);
-                    }
-                 }}
-                 className={`flex items-center justify-center gap-2 bg-white py-4 font-bold transition-colors border-b border-slate-100 rounded-none whitespace-nowrap ${contextMenuDeleteConfirm ? 'text-red-600 bg-red-50' : 'text-rose-600 hover:bg-rose-50'}`}
-               >
-                 <Trash2 size={16} /> 
-                 {contextMenuDeleteConfirm ? '确认?' : (selectedCategory === 'favorites' ? '取消收藏' : '删除照片')}
-               </button>
-               <button 
-                 onClick={() => setContextMenuPhoto(null)}
-                 className="py-4 text-slate-400 hover:text-slate-900 font-medium bg-slate-50 rounded-none whitespace-nowrap"
-               >
-                 取消
-               </button>
-             </div>
-           </div>
-        </div>
-      )}
-
-      {/* Settings Modal (Theme) */}
+      {/* Settings Modal (Simplified) */}
       {isSettingsOpen && (
-        <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/40 backdrop-blur-sm p-4 animate-in fade-in duration-200">
-           <div className="bg-white w-full max-w-md shadow-2xl p-0 border border-slate-200 rounded-none max-h-[90vh] overflow-y-auto">
-             <div className="p-5 border-b border-slate-100 flex justify-between items-center sticky top-0 bg-white z-10">
-                <h3 className="text-base font-black text-slate-900 uppercase tracking-widest whitespace-nowrap">设置</h3>
-                <button onClick={() => setIsSettingsOpen(false)}><X size={20} className="text-slate-400 hover:text-slate-900"/></button>
-             </div>
-             <div className="p-6">
-                <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-4 whitespace-nowrap">UI 主题色</h4>
-                <div className="grid grid-cols-4 gap-4">
-                  {(['zinc', 'blue', 'indigo', 'rose', 'orange', 'emerald', 'cyan', 'violet', 'fuchsia', 'lime', 'amber', 'teal', 'sky'] as ThemeColor[]).map(color => (
-                    <button
-                      key={color}
-                      onClick={() => setThemeColor(color)}
-                      className={`flex flex-col items-center gap-2 p-2 border-2 transition-all rounded-none ${
-                        themeColor === color ? 'border-slate-900 bg-slate-50' : 'border-transparent hover:bg-slate-50'
-                      }`}
-                    >
-                      <div className={`w-8 h-8 rounded-full shadow-sm ${
-                        color === 'zinc' ? 'bg-slate-900' : `bg-${color}-600`
-                      }`}></div>
-                      <span className="text-[10px] uppercase font-bold text-slate-500">{color}</span>
-                    </button>
-                  ))}
-                </div>
-             </div>
-             <div className="p-4 border-t border-slate-100 bg-slate-50">
-               <button 
-                 onClick={() => setIsSettingsOpen(false)}
-                 className="w-full py-3 bg-slate-900 text-white font-bold text-xs uppercase tracking-wider hover:bg-slate-800 rounded-none whitespace-nowrap"
-               >
-                 确定
-               </button>
-             </div>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm animate-fade-in" onClick={() => setIsSettingsOpen(false)}>
+           <div className="bg-white p-8 w-full max-w-sm shadow-2xl rounded-none relative" onClick={e => e.stopPropagation()}>
+              <button onClick={() => setIsSettingsOpen(false)} className="absolute top-4 right-4 text-slate-400 hover:text-slate-900"><X size={20}/></button>
+              <h2 className="text-xl font-black text-slate-900 mb-6 uppercase tracking-tight">应用设置</h2>
+              
+              <div className="mb-6">
+                 <label className="text-xs font-bold text-slate-400 uppercase tracking-widest block mb-3">主题色</label>
+                 <div className="flex flex-wrap gap-2">
+                    {['zinc', 'blue', 'indigo', 'rose', 'orange', 'emerald'].map((color) => (
+                       <button
+                         key={color}
+                         onClick={() => setThemeColor(color as ThemeColor)}
+                         className={`w-8 h-8 rounded-full border-2 transition-transform hover:scale-110 ${themeColor === color ? 'border-slate-900 scale-110' : 'border-transparent'}`}
+                         style={{ backgroundColor: color === 'zinc' ? '#334155' : `var(--color-${color}-500, ${color})` }}
+                       />
+                    ))}
+                 </div>
+              </div>
+              
+              <div className="border-t border-slate-100 pt-6">
+                 <p className="text-xs text-slate-400 text-center">Version 1.2.0 • AI Powered</p>
+              </div>
            </div>
         </div>
       )}
 
-      {/* Modal */}
+      {/* Photo Detail Modal */}
       <PhotoModal 
         photo={selectedPhoto}
         categories={categories}

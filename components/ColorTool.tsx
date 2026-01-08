@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect, useRef } from 'react';
+import React, { useState, useMemo, useRef } from 'react';
 import { Check, Plus, Trash2, Palette, Edit3, X, Edit2 } from 'lucide-react';
 import { ColorGroup, ColorItem } from '../types';
 
@@ -221,15 +221,18 @@ export const ColorTool: React.FC<ColorToolProps> = ({ groups, onUpdateGroups }) 
   };
 
   return (
-    <div className="flex flex-col md:flex-row h-full bg-gray-50 overflow-hidden font-sans pt-safe pb-safe">
+    <div className="flex flex-col md:flex-row h-full bg-gray-50 overflow-hidden font-sans">
       
-      {/* LEFT: Display Panel */}
-      <div className="w-full md:w-5/12 h-2/5 md:h-full relative flex flex-col transition-all duration-500 ease-in-out shadow-xl z-10 border-r border-slate-200 overflow-y-auto custom-scrollbar">
+      {/* LEFT: Display Panel - Expanded in Mobile to hit top */}
+      <div className="w-full md:w-5/12 h-2/5 md:h-full relative flex flex-col transition-all duration-500 ease-in-out shadow-xl z-10 border-r border-slate-200 overflow-hidden shrink-0">
         <div 
           className="absolute inset-0 z-0"
           style={{ background: `linear-gradient(to bottom right, ${selectedColor}, #ffffff)` }}
         />
         
+        {/* Safe area spacer for mobile top */}
+        <div className="h-safe pt-safe w-full"></div>
+
         <div className="relative z-10 flex flex-col flex-1 p-8 items-center justify-center text-center">
            {/* Color Name */}
            <h2 className="text-4xl md:text-5xl font-black text-gray-900 mb-2 font-serif tracking-tight">
@@ -266,11 +269,11 @@ export const ColorTool: React.FC<ColorToolProps> = ({ groups, onUpdateGroups }) 
 
            {/* Values */}
            <div className="grid grid-cols-2 gap-4 w-full max-w-xs mb-8">
-              <div className="bg-white/60 backdrop-blur-md p-3 shadow-sm border border-white/40 rounded-none">
+              <div className="bg-white/60 backdrop-blur-md p-3 shadow-sm border border-white/40 rounded-none whitespace-nowrap">
                 <span className="block text-[10px] text-gray-500 uppercase font-bold mb-1 tracking-wider">RGB</span>
                 <span className="font-mono text-gray-900 font-medium">{rgb.r}, {rgb.g}, {rgb.b}</span>
               </div>
-              <div className="bg-white/60 backdrop-blur-md p-3 shadow-sm border border-white/40 rounded-none">
+              <div className="bg-white/60 backdrop-blur-md p-3 shadow-sm border border-white/40 rounded-none whitespace-nowrap">
                 <span className="block text-[10px] text-gray-500 uppercase font-bold mb-1 tracking-wider">HSV</span>
                 <span className="font-mono text-gray-900 font-medium">{hsv.h}°, {hsv.s}%, {hsv.v}%</span>
               </div>
@@ -278,110 +281,112 @@ export const ColorTool: React.FC<ColorToolProps> = ({ groups, onUpdateGroups }) 
         </div>
       </div>
 
-      {/* RIGHT: Library Panel */}
-      <div className="w-full md:w-7/12 h-3/5 md:h-full bg-white overflow-y-auto p-4 md:p-10 relative custom-scrollbar">
-        <div className="flex justify-between items-center mb-8 sticky top-0 bg-white/95 backdrop-blur-sm py-4 z-20 border-b border-gray-100">
-           <h3 className="text-xl font-black text-gray-900 flex items-center gap-2 uppercase tracking-wide whitespace-nowrap">
-            <Palette size={20} className="text-gray-900" />
-            色彩库
-          </h3>
-          <button 
-            onClick={() => setIsAddingGroup(true)}
-            className="flex items-center gap-1 text-xs bg-slate-100 hover:bg-slate-200 text-gray-900 px-4 py-2 transition-colors font-bold uppercase tracking-wider rounded-none whitespace-nowrap"
-          >
-            <Plus size={14} /> 新建色彩组
-          </button>
-        </div>
-        
-        {/* Create Group Form */}
-        {isAddingGroup && (
-          <div className="mb-6 p-4 bg-gray-50 border border-gray-200 animate-fade-in rounded-none">
-            <h4 className="text-xs font-bold text-gray-700 mb-3 uppercase">新建组名</h4>
-            <div className="flex gap-0">
-              <input 
-                type="text" 
-                value={newGroupName}
-                onChange={(e) => setNewGroupName(e.target.value)}
-                placeholder="名称"
-                className="flex-1 border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:border-black rounded-none"
-              />
-              <button onClick={handleCreateGroup} className="bg-black text-white px-5 py-2 text-xs font-bold hover:bg-gray-800 uppercase rounded-none whitespace-nowrap">创建</button>
-              <button onClick={() => setIsAddingGroup(false)} className="bg-white border border-l-0 border-gray-300 text-gray-700 px-5 py-2 text-xs font-bold hover:bg-gray-50 uppercase rounded-none whitespace-nowrap">取消</button>
+      {/* RIGHT: Library Panel - Unified Scrolling */}
+      <div className="w-full md:w-7/12 h-3/5 md:h-full bg-white overflow-y-auto relative custom-scrollbar flex flex-col">
+        <div className="p-4 md:p-10 pb-safe">
+            <div className="flex justify-between items-center mb-8 py-2">
+            <h3 className="text-xl font-black text-gray-900 flex items-center gap-2 uppercase tracking-wide whitespace-nowrap">
+                <Palette size={20} className="text-gray-900" />
+                色彩库
+            </h3>
+            <button 
+                onClick={() => setIsAddingGroup(true)}
+                className="flex items-center gap-1 text-xs bg-slate-100 hover:bg-slate-200 text-gray-900 px-4 py-2 transition-colors font-bold uppercase tracking-wider rounded-none whitespace-nowrap"
+            >
+                <Plus size={14} /> 新建色彩组
+            </button>
             </div>
-          </div>
-        )}
+            
+            {/* Create Group Form */}
+            {isAddingGroup && (
+            <div className="mb-6 p-4 bg-gray-50 border border-gray-200 animate-fade-in rounded-none">
+                <h4 className="text-xs font-bold text-gray-700 mb-3 uppercase">新建组名</h4>
+                <div className="flex gap-0">
+                <input 
+                    type="text" 
+                    value={newGroupName}
+                    onChange={(e) => setNewGroupName(e.target.value)}
+                    placeholder="名称"
+                    className="flex-1 border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:border-black rounded-none"
+                />
+                <button onClick={handleCreateGroup} className="bg-black text-white px-5 py-2 text-xs font-bold hover:bg-gray-800 uppercase rounded-none whitespace-nowrap">创建</button>
+                <button onClick={() => setIsAddingGroup(false)} className="bg-white border border-l-0 border-gray-300 text-gray-700 px-5 py-2 text-xs font-bold hover:bg-gray-50 uppercase rounded-none whitespace-nowrap">取消</button>
+                </div>
+            </div>
+            )}
 
-        <div className="space-y-10 pb-10">
-          {groups.map((group) => (
-            <div key={group.id} className="relative group/container">
-              <div className="flex items-center justify-between mb-3 border-b border-gray-100 pb-2">
-                <h4 className="text-xs font-black text-gray-400 uppercase tracking-widest">{group.name}</h4>
-                <div className="flex items-center gap-2">
-                  <button 
-                    onClick={() => setAddingColorToGroupId(group.id)}
-                    className="text-[10px] flex items-center gap-1 text-gray-500 hover:text-black font-bold uppercase tracking-wider whitespace-nowrap"
-                  >
-                    <Plus size={10} /> 添加颜色
-                  </button>
-                  {group.isCustom && (
+            <div className="space-y-10 pb-10">
+            {groups.map((group) => (
+                <div key={group.id} className="relative group/container">
+                <div className="flex items-center justify-between mb-3 border-b border-gray-100 pb-2">
+                    <h4 className="text-xs font-black text-gray-400 uppercase tracking-widest">{group.name}</h4>
+                    <div className="flex items-center gap-2">
                     <button 
-                      onClick={() => handleDeleteGroup(group.id)}
-                      className="text-xs text-red-300 hover:text-red-600 p-1 transition-colors"
+                        onClick={() => setAddingColorToGroupId(group.id)}
+                        className="text-[10px] flex items-center gap-1 text-gray-500 hover:text-black font-bold uppercase tracking-wider whitespace-nowrap"
                     >
-                      <Trash2 size={12} />
+                        <Plus size={10} /> 添加颜色
                     </button>
-                  )}
-                </div>
-              </div>
-
-              {/* Add Color Form for this group */}
-              {addingColorToGroupId === group.id && (
-                <div className="mb-4 p-4 bg-gray-50 border border-gray-200 rounded-none shadow-sm">
-                   <h5 className="text-xs font-bold text-gray-700 mb-3 uppercase">添加到 "{group.name}"</h5>
-                   <div className="flex flex-col md:flex-row gap-2">
-                     <input 
-                        type="text"
-                        value={newColorHex}
-                        onChange={(e) => setNewColorHex(e.target.value)}
-                        placeholder="#HEX"
-                        className="flex-1 border border-gray-300 px-3 py-2 text-sm uppercase rounded-none focus:border-black outline-none"
-                     />
-                     <input 
-                        type="text"
-                        value={newColorName}
-                        onChange={(e) => setNewColorName(e.target.value)}
-                        placeholder="颜色名称"
-                        className="flex-1 border border-gray-300 px-3 py-2 text-sm rounded-none focus:border-black outline-none"
-                     />
-                     <div className="flex gap-0">
-                        <button onClick={handleAddColorToGroup} className="bg-black text-white px-4 py-2 text-sm rounded-none hover:bg-gray-800"><Check size={16}/></button>
-                        <button onClick={() => setAddingColorToGroupId(null)} className="bg-white border border-gray-300 border-l-0 text-gray-500 px-4 py-2 text-sm rounded-none hover:bg-gray-50"><X size={16}/></button>
-                     </div>
-                   </div>
-                </div>
-              )}
-
-              {group.colors.length === 0 ? (
-                <div className="text-xs text-gray-300 italic py-4 border border-dashed border-gray-200 text-center rounded-none whitespace-nowrap">暂无颜色</div>
-              ) : (
-                <div className="grid grid-cols-6 sm:grid-cols-8 md:grid-cols-6 lg:grid-cols-8 xl:grid-cols-10 gap-2">
-                  {group.colors.map((color) => (
-                    <div key={color.id} className="group relative">
-                      <button
-                        onPointerDown={() => startPress(group.id, color)}
-                        onPointerUp={() => { cancelPress(); handleColorClick(color); }}
-                        onPointerLeave={cancelPress}
-                        onContextMenu={(e) => e.preventDefault()}
-                        className={`w-full aspect-square shadow-sm hover:shadow-lg transition-all duration-200 ring-2 ring-offset-2 ${selectedColor === color.hex ? 'ring-black z-10 scale-105' : 'ring-transparent hover:scale-110 hover:z-10'} rounded-none`}
-                        style={{ backgroundColor: color.hex }}
-                        title={color.name}
-                      />
+                    {group.isCustom && (
+                        <button 
+                        onClick={() => handleDeleteGroup(group.id)}
+                        className="text-xs text-red-300 hover:text-red-600 p-1 transition-colors"
+                        >
+                        <Trash2 size={12} />
+                        </button>
+                    )}
                     </div>
-                  ))}
                 </div>
-              )}
+
+                {/* Add Color Form for this group */}
+                {addingColorToGroupId === group.id && (
+                    <div className="mb-4 p-4 bg-gray-50 border border-gray-200 rounded-none shadow-sm">
+                    <h5 className="text-xs font-bold text-gray-700 mb-3 uppercase">添加到 "{group.name}"</h5>
+                    <div className="flex flex-col md:flex-row gap-2">
+                        <input 
+                            type="text"
+                            value={newColorHex}
+                            onChange={(e) => setNewColorHex(e.target.value)}
+                            placeholder="#HEX"
+                            className="flex-1 border border-gray-300 px-3 py-2 text-sm uppercase rounded-none focus:border-black outline-none"
+                        />
+                        <input 
+                            type="text"
+                            value={newColorName}
+                            onChange={(e) => setNewColorName(e.target.value)}
+                            placeholder="颜色名称"
+                            className="flex-1 border border-gray-300 px-3 py-2 text-sm rounded-none focus:border-black outline-none"
+                        />
+                        <div className="flex gap-0">
+                            <button onClick={handleAddColorToGroup} className="bg-black text-white px-4 py-2 text-sm rounded-none hover:bg-gray-800"><Check size={16}/></button>
+                            <button onClick={() => setAddingColorToGroupId(null)} className="bg-white border border-gray-300 border-l-0 text-gray-500 px-4 py-2 text-sm rounded-none hover:bg-gray-50"><X size={16}/></button>
+                        </div>
+                    </div>
+                    </div>
+                )}
+
+                {group.colors.length === 0 ? (
+                    <div className="text-xs text-gray-300 italic py-4 border border-dashed border-gray-200 text-center rounded-none whitespace-nowrap">暂无颜色</div>
+                ) : (
+                    <div className="grid grid-cols-6 sm:grid-cols-8 md:grid-cols-6 lg:grid-cols-8 xl:grid-cols-10 gap-2">
+                    {group.colors.map((color) => (
+                        <div key={color.id} className="group relative">
+                        <button
+                            onPointerDown={() => startPress(group.id, color)}
+                            onPointerUp={() => { cancelPress(); handleColorClick(color); }}
+                            onPointerLeave={cancelPress}
+                            onContextMenu={(e) => e.preventDefault()}
+                            className={`w-full aspect-square shadow-sm hover:shadow-lg transition-all duration-200 ring-2 ring-offset-2 ${selectedColor === color.hex ? 'ring-black z-10 scale-105' : 'ring-transparent hover:scale-110 hover:z-10'} rounded-none`}
+                            style={{ backgroundColor: color.hex }}
+                            title={color.name}
+                        />
+                        </div>
+                    ))}
+                    </div>
+                )}
+                </div>
+            ))}
             </div>
-          ))}
         </div>
       </div>
       
