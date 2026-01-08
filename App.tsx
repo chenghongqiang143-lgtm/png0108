@@ -5,6 +5,7 @@ import { ColorTool } from './components/ColorTool';
 import { NoteTool } from './components/NoteTool';
 import { Photo, Category, ThemeColor, ColorGroup } from './types';
 import { Search, Upload, ImagePlus, Menu, Edit2, Trash2, LayoutGrid, Grid3x3, Square, Folder, ChevronRight, Image as ImageIcon, Check, Loader2, Clock, X, CheckSquare, MousePointer2, Move, Tag } from 'lucide-react';
+import { saveImageToDB, getImageFromDB, deleteImageFromDB } from './services/imageDB';
 
 // Initial Dummy Data
 const INITIAL_CATEGORIES: Category[] = [
@@ -157,8 +158,17 @@ const groupPhotosByDate = (photos: Photo[]) => {
 const App: React.FC = () => {
   // --- States ---
   const [isLoading, setIsLoading] = useState(true);
-  const [categories, setCategories] = useState<Category[]>(INITIAL_CATEGORIES);
-  const [photos, setPhotos] = useState<Photo[]>(INITIAL_PHOTOS);
+  const [categories, setCategories] = useState<Category[]>(() => {
+    const saved = localStorage.getItem('categories');
+    return saved ? JSON.parse(saved) : INITIAL_CATEGORIES;
+  });
+
+  // Photos state - initially empty or from localStorage meta, but we need to hydrate blobs
+  const [photos, setPhotos] = useState<Photo[]>(() => {
+    const saved = localStorage.getItem('photos');
+    return saved ? JSON.parse(saved) : INITIAL_PHOTOS;
+  });
+
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState('');
   
@@ -221,6 +231,56 @@ const App: React.FC = () => {
 
   const isToolView = selectedCategory.startsWith('tool-');
 
+  // Load photos from DB on startup
+  useEffect(() => {
+    const hydratePhotos = async () => {
+      setIsLoading(true);
+      const updatedPhotos = [...photos];
+      let hasChanges = false;
+
+      // Promise.all to fetch all images in parallel
+      await Promise.all(updatedPhotos.map(async (photo, index) => {
+        // If it's not an HTTP url (assuming initial data is http), it might be a blob ID
+        // Or if it WAS a blob url, it's now invalid after reload, so we check DB
+        if (!photo.url.startsWith('http')) {
+            try {
+                const blob = await getImageFromDB(photo.id);
+                if (blob) {
+                    const newUrl = URL.createObjectURL(blob);
+                    updatedPhotos[index] = { ...photo, url: newUrl };
+                    hasChanges = true;
+                }
+            } catch (e) {
+                console.error("Failed to load image from DB", photo.id);
+            }
+        }
+      }));
+
+      if (hasChanges) {
+        setPhotos(updatedPhotos);
+      }
+      setIsLoading(false);
+    };
+
+    hydratePhotos();
+    
+    // Cleanup URLs on unmount to prevent memory leaks
+    return () => {
+        photos.forEach(p => {
+            if (p.url.startsWith('blob:')) URL.revokeObjectURL(p.url);
+        });
+    };
+  }, []);
+
+  // Save metadata changes to LocalStorage
+  useEffect(() => {
+    localStorage.setItem('photos', JSON.stringify(photos));
+  }, [photos]);
+  
+  useEffect(() => {
+    localStorage.setItem('categories', JSON.stringify(categories));
+  }, [categories]);
+
   // New unified processor for single or multiple files
   const handleBatchFileProcess = async (files: File[]) => {
       if (files.length === 0) return;
@@ -228,8 +288,13 @@ const App: React.FC = () => {
       const newPhotosToState: Photo[] = [];
       
       for (const file of files) {
-          const objectUrl = URL.createObjectURL(file);
           const newPhotoId = crypto.randomUUID();
+          
+          // Save actual file data to IndexedDB
+          await saveImageToDB(newPhotoId, file);
+
+          // Create temporary display URL
+          const objectUrl = URL.createObjectURL(file);
           
           // Use filename as title, remove extension
           const title = file.name.replace(/\.[^/.]+$/, "");
@@ -249,13 +314,8 @@ const App: React.FC = () => {
       setPhotos(prev => [...newPhotosToState, ...prev]);
   };
 
-  // Startup Effect
+  // Startup Effect for Launch Queue
   useEffect(() => {
-    // Simulate loading resources or checking auth
-    const timer = setTimeout(() => {
-      setIsLoading(false);
-    }, 800); // 800ms loading simulation
-
     // PWA Launch Queue for Android Share Target
     if ('launchQueue' in window) {
       (window as any).launchQueue.setConsumer(async (launchParams: any) => {
@@ -275,8 +335,6 @@ const App: React.FC = () => {
         }
       });
     }
-
-    return () => clearTimeout(timer);
   }, []);
 
   // --- HISTORY API HANDLER for Mobile Back Gesture ---
@@ -453,23 +511,30 @@ const App: React.FC = () => {
     setSelectedPhoto(updatedPhoto);
   };
 
-  const handleDeletePhoto = (photoId: string) => {
+  const handleDeletePhoto = async (photoId: string) => {
     // Check if we are in "Favorites" view
     // Note: If user is in "Favorites" category, delete just removes favorite status
     if (selectedCategory === 'favorites') {
         setPhotos(prev => prev.map(p => p.id === photoId ? { ...p, isFavorite: false } : p));
     } else {
+        // Delete from State
         setPhotos(prev => prev.filter(p => p.id !== photoId));
+        // Delete from IndexedDB
+        await deleteImageFromDB(photoId);
     }
     setContextMenuPhoto(null);
     setSelectedPhoto(null);
   };
 
-  const handleBatchDelete = () => {
+  const handleBatchDelete = async () => {
     if (batchDeleteConfirm) {
       if (selectedCategory === 'favorites') {
          setPhotos(prev => prev.map(p => selectedIds.has(p.id) ? { ...p, isFavorite: false } : p));
       } else {
+         // Batch delete from DB
+         for (const id of selectedIds) {
+             await deleteImageFromDB(id);
+         }
          setPhotos(prev => prev.filter(p => !selectedIds.has(p.id)));
       }
       setSelectedIds(new Set());

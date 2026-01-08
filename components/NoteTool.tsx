@@ -374,7 +374,11 @@ export const NoteTool: React.FC = () => {
         <div className="flex-1 overflow-y-auto p-4 custom-scrollbar bg-white">
            <div 
              ref={editorRef}
-             className="prose prose-sm prose-slate max-w-3xl mx-auto focus:outline-none min-h-[50vh]"
+             // Tailwind arbitrary variants to target inner HTML elements specifically
+             className="prose prose-sm prose-slate max-w-3xl mx-auto focus:outline-none min-h-[50vh] 
+                        [&>h1]:text-3xl [&>h1]:font-black [&>h1]:mt-6 [&>h1]:mb-4
+                        [&>h2]:text-2xl [&>h2]:font-bold [&>h2]:mt-5 [&>h2]:mb-3
+                        [&>h3]:text-xl [&>h3]:font-bold [&>h3]:mt-4 [&>h3]:mb-2"
              contentEditable
              onKeyDown={handleKeyDown}
              onInput={handleSave}

@@ -337,20 +337,21 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
   const tagSuggestions = availableTags.filter(t => !currentTags.includes(t) && t.toLowerCase().includes(newTag.toLowerCase())).slice(0, 10);
 
   return (
-    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/95 md:bg-black/90 backdrop-blur-md md:p-12 animate-in fade-in duration-200">
+    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/95 md:bg-black/90 backdrop-blur-md md:p-12 animate-in fade-in duration-200 overflow-y-auto md:overflow-hidden">
       
-      {/* Main Container */}
-      <div className="bg-transparent md:bg-white w-full h-full md:h-auto md:max-h-[85vh] md:max-w-6xl overflow-hidden flex flex-col md:flex-row shadow-2xl relative rounded-none">
+      {/* Main Container: Changed layout strategy for mobile landscape to allow vertical scroll */}
+      <div className="bg-transparent md:bg-white w-full min-h-full md:min-h-0 md:h-auto md:max-h-[85vh] md:max-w-6xl flex flex-col md:flex-row shadow-2xl relative rounded-none">
         
         {/* IMAGE SECTION (Full screen on mobile view, Partial on mobile edit, Left side on Desktop) */}
+        {/* Mobile Landscape optimization: In landscape on small devices, remove fixed height so it flows */}
         <div 
             ref={imgContainerRef}
-            className={`${isEditing ? 'h-72 md:h-auto md:h-full' : 'h-full md:h-auto'} w-full md:w-2/3 bg-black/40 md:bg-zinc-950 flex items-center justify-center relative group shrink-0 overflow-hidden transition-all duration-300`}
+            className={`${isEditing ? 'h-72 md:h-auto md:h-full' : 'h-[50vh] landscape:h-auto landscape:min-h-[60vh] md:h-auto md:h-full'} w-full md:w-2/3 bg-black/40 md:bg-zinc-950 flex items-center justify-center relative group shrink-0 transition-all duration-300 overflow-hidden md:rounded-l-lg`}
         >
           
           {/* Top Controls (Zoom & Close) - Moved down for Safe Area */}
           {!isEditing && (
-            <div className="absolute top-0 inset-x-0 z-30 flex justify-end p-4 pt-safe mt-12 gap-3 pointer-events-none">
+            <div className="absolute top-0 inset-x-0 z-30 flex justify-end p-4 pt-safe mt-4 md:mt-12 gap-3 pointer-events-none">
                 <div className="flex gap-2 bg-black/50 p-1.5 rounded-full backdrop-blur-md pointer-events-auto">
                     <button onClick={handleZoomOut} className="p-2 text-white/90 hover:text-white hover:bg-white/20 rounded-full transition-colors" title="缩小">
                         <ZoomOut size={20} />
@@ -489,8 +490,8 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
           )}
         </div>
 
-        {/* DETAILS SECTION (Visible on Desktop always, Visible on Mobile ONLY when editing) */}
-        <div className={`${isEditing ? 'flex' : 'hidden md:flex'} w-full md:w-1/3 flex-col h-full bg-white overflow-hidden border-l border-gray-100 pb-safe`}>
+        {/* DETAILS SECTION (Visible on Desktop always, Visible on Mobile ONLY when editing or in flow) */}
+        <div className={`${isEditing ? 'flex' : 'hidden md:flex landscape:flex'} w-full md:w-1/3 flex-col md:h-full bg-white md:overflow-hidden border-l border-gray-100 pb-safe`}>
           {/* Header */}
           <div className="p-6 border-b border-gray-100 flex justify-between items-end shrink-0">
             <div>
@@ -550,7 +551,7 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
           </div>
 
           {/* Content Scrollable - Added explicit scrolling for landscape */}
-          <div className="flex-1 overflow-y-auto p-6 space-y-8 pb-6 custom-scrollbar h-0 min-h-0 md:h-auto">
+          <div className="flex-1 overflow-y-auto p-6 space-y-8 pb-6 custom-scrollbar h-auto md:h-0 md:min-h-0">
             
             {/* Title & Description */}
             <div className="group relative">
