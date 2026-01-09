@@ -141,6 +141,13 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
       };
   }, [zoomLevel, pan, isDragging, swipeOffset, isPickerActive, viewMode, cropModeActive, hasPrev, hasNext, showMobileInfo]);
 
+  // Helper to stop propagation for UI controls
+  const stopPropagation = (e: React.TouchEvent | React.MouseEvent | React.PointerEvent) => {
+    e.stopPropagation();
+    // @ts-ignore
+    if (e.nativeEvent) e.nativeEvent.stopImmediatePropagation();
+  };
+
   // Native Gesture Handling
   useEffect(() => {
     if (!isOpen) return;
@@ -165,6 +172,12 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
     };
 
     const handleTouchStart = (e: TouchEvent) => {
+        // Robust Exclusion: If touching any UI control (slider, buttons), ignore gesture logic
+        const target = e.target as HTMLElement;
+        if (target.closest('.no-gesture-propagation') || ['INPUT', 'BUTTON', 'A', 'TEXTAREA'].includes(target.tagName)) {
+            return;
+        }
+
         const state = gestureStateRef.current;
         if (state.isPickerActive) {
             extractColor(e.touches[0].clientX, e.touches[0].clientY);
@@ -172,24 +185,30 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
         }
 
         // AGGRESSIVELY Prevent default to stop ghost dragging of images on mobile (especially Blobs)
-        // This is safe because we implement our own Pan/Zoom/Tap logic.
+        // This is safe because we've already excluded UI controls above.
         if (e.cancelable) e.preventDefault(); 
 
         if (e.touches.length === 2) {
             gesture.isPinching = true;
             gesture.initialDist = getDistance(e.touches);
             gesture.initialZoom = state.zoomLevel;
-            setIsDragging(true); 
+            // Clear dragging state momentarily to avoid jump
+            gesture.isDragging = false; 
         } else if (e.touches.length === 1) {
             gesture.isDragging = true;
             gesture.startTouch = { x: e.touches[0].clientX, y: e.touches[0].clientY };
             gesture.startPan = { ...state.pan };
             gesture.startTime = Date.now();
-            setIsDragging(true);
         }
     };
 
     const handleTouchMove = (e: TouchEvent) => {
+        // Robust Exclusion
+        const target = e.target as HTMLElement;
+        if (target.closest('.no-gesture-propagation') || ['INPUT', 'BUTTON', 'A', 'TEXTAREA'].includes(target.tagName)) {
+            return;
+        }
+
         const state = gestureStateRef.current;
         if (state.isPickerActive) {
             e.preventDefault();
@@ -226,12 +245,26 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
     };
 
     const handleTouchEnd = (e: TouchEvent) => {
+        // Robust Exclusion
+        const target = e.target as HTMLElement;
+        if (target.closest('.no-gesture-propagation') || ['INPUT', 'BUTTON', 'A', 'TEXTAREA'].includes(target.tagName)) {
+            return;
+        }
+
         const state = gestureStateRef.current;
         
         if (state.isPickerActive) return;
 
-        if (e.touches.length < 2) {
+        // Transition from Pinch (2 fingers) to Drag (1 finger)
+        if (e.touches.length < 2 && gesture.isPinching) {
             gesture.isPinching = false;
+            // If one finger remains, reset the drag origin to prevent "jumping"
+            if (e.touches.length === 1) {
+                gesture.startTouch = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+                gesture.startPan = { ...state.pan };
+                gesture.isDragging = true;
+                return; // Exit early to continue dragging seamlessly
+            }
         }
 
         if (e.touches.length === 0) {
@@ -314,9 +347,13 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
 
   }, [isOpen]); 
 
-  // Auto hide controls on zoom for better view
+  // Auto hide controls on zoom for better view, but SHOW them when returning to 1x
   useEffect(() => {
-     if (zoomLevel > 1) setShowMobileControls(false);
+     if (zoomLevel > 1) {
+         setShowMobileControls(false);
+     } else {
+         setShowMobileControls(true);
+     }
   }, [zoomLevel]);
 
   // Sync logic for switching photos
@@ -600,11 +637,12 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
         <div 
             ref={imgContainerRef}
             onMouseDown={handleMouseDown} onMouseMove={handleMouseMove} onMouseUp={handleMouseUp} onMouseLeave={handleMouseUp}
-            className={`w-full lg:w-3/4 bg-black flex items-center justify-center relative group shrink-0 overflow-hidden lg:rounded-l-lg flex-1 min-h-0`}
+            // Use w-full on lg if in edit mode (sidebar hidden)
+            className={`w-full ${viewMode === 'image-edit' ? 'lg:w-full' : 'lg:w-3/4'} bg-black flex items-center justify-center relative group shrink-0 overflow-hidden lg:rounded-l-lg flex-1 min-h-0`}
             style={{ touchAction: 'none' }}
         >
           {/* Mobile Top Bar */}
-          <div className={`absolute top-6 inset-x-0 p-4 z-30 flex justify-between items-start lg:hidden pt-safe transition-opacity duration-300 ${showMobileControls ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}>
+          <div className={`absolute top-6 inset-x-0 p-4 z-30 flex justify-between items-start lg:hidden pt-safe transition-opacity duration-300 no-gesture-propagation ${showMobileControls ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}>
               <button onClick={onClose} className="p-2.5 text-white bg-white/10 border border-white/10 backdrop-blur-md rounded-full active:bg-white/20 shadow-sm">
                   <ChevronLeft size={24} />
               </button>
@@ -617,7 +655,7 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
 
           {/* Mobile Bottom Bar (View Mode) */}
           {viewMode === 'view' && (
-             <div className={`absolute bottom-0 inset-x-0 z-30 flex justify-around items-center lg:hidden pb-safe pt-6 bg-gradient-to-t from-black/90 via-black/50 to-transparent transition-transform duration-300 ${showMobileControls && !showMobileInfo ? 'translate-y-0' : 'translate-y-full'}`}>
+             <div className={`absolute bottom-0 inset-x-0 z-30 flex justify-around items-center lg:hidden pb-safe pt-6 bg-gradient-to-t from-black/90 via-black/50 to-transparent transition-transform duration-300 no-gesture-propagation ${showMobileControls && !showMobileInfo ? 'translate-y-0' : 'translate-y-full'}`}>
                  <button onClick={() => setShowMobileInfo(true)} className="p-4 text-white/90 flex flex-col items-center gap-1 active:scale-95 transition-transform">
                      <Info size={24} strokeWidth={1.5} />
                      <span className="text-[10px] font-medium opacity-80">信息</span>
@@ -637,19 +675,42 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
              </div>
           )}
 
-          {/* Edit Mode Toolbar (Overlay) */}
+          {/* Edit Mode Toolbar (Overlay) - Added no-gesture-propagation and FORCE stop propagation */}
           {viewMode === 'image-edit' && (
-              <div className="absolute bottom-0 inset-x-0 z-40 bg-black/80 backdrop-blur-md border-t border-white/10 pb-safe animate-slide-in-from-bottom-4">
+              <div 
+                  className="absolute bottom-0 inset-x-0 z-40 bg-black/80 backdrop-blur-md border-t border-white/10 pb-safe animate-slide-in-from-bottom-4 no-gesture-propagation"
+                  // Explicitly stop propagation to prevent interfering with parent gestures
+                  onTouchStart={stopPropagation}
+                  onTouchMove={stopPropagation}
+                  onTouchEnd={stopPropagation}
+                  onMouseDown={stopPropagation}
+                  onMouseMove={stopPropagation}
+                  onMouseUp={stopPropagation}
+              >
                   {/* Rotation Slider */}
                   <div className="px-6 py-2 flex items-center gap-4">
-                      <span className="text-[10px] text-gray-400 font-bold w-8 text-right">{Math.round(editRotation)}°</span>
+                      <span className="text-[10px] text-gray-400 font-bold w-8 text-right">
+                          {Number.isInteger(editRotation) ? editRotation : editRotation.toFixed(1)}°
+                      </span>
                       <input 
                         type="range" 
                         min="-180" 
                         max="180" 
-                        step="1"
+                        step="0.1"
                         value={editRotation}
-                        onChange={(e) => setEditRotation(Number(e.target.value))}
+                        onChange={(e) => {
+                            let val = Number(e.target.value);
+                            // Snap to 0, 90, 180, -90, -180 within 2 degrees
+                            const threshold = 2;
+                            if (Math.abs(val) < threshold) val = 0;
+                            else if (Math.abs(val - 90) < threshold) val = 90;
+                            else if (Math.abs(val - 180) < threshold) val = 180;
+                            else if (Math.abs(val + 90) < threshold) val = -90;
+                            else if (Math.abs(val + 180) < threshold) val = -180;
+                            setEditRotation(val);
+                        }}
+                        // Ensure panning this slider works on mobile
+                        style={{ touchAction: 'pan-x' }}
                         className="w-full h-1 bg-gray-600 rounded-lg appearance-none cursor-pointer accent-indigo-500"
                       />
                   </div>
@@ -690,7 +751,7 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
 
           {/* Desktop Controls */}
           <div className="absolute top-0 inset-x-0 z-30 justify-end p-4 pt-8 gap-3 hidden lg:flex pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity">
-                <div className="flex gap-2 bg-black/50 p-1.5 rounded-full backdrop-blur-md pointer-events-auto">
+                <div className="flex gap-2 bg-black/50 p-1.5 rounded-full backdrop-blur-md pointer-events-auto no-gesture-propagation">
                     <button onClick={handleZoomOut} className="p-2 text-white/90 hover:text-white hover:bg-white/20 rounded-full transition-colors" title="缩小"><ZoomOut size={20} /></button>
                     <button onClick={handleZoomIn} className="p-2 text-white/90 hover:text-white hover:bg-white/20 rounded-full transition-colors" title="放大"><ZoomIn size={20} /></button>
                     <div className="w-px bg-white/20 mx-1"></div>
@@ -706,17 +767,24 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
           {/* ACTIVE PHOTO */}
           <div className="relative w-full h-full flex items-center justify-center overflow-hidden pointer-events-none" style={{ transform: exitingPhoto ? undefined : `translate(${pan.x + swipeOffset}px, ${pan.y}px) scale(${zoomLevel})`, transition: isDragging || swipeOffset !== 0 ? 'none' : 'transform 0.2s ease-out' }}>
               <img 
-                key={activePhoto.id} ref={imgRef} src={activePhoto.url} alt={activePhoto.title} crossOrigin="anonymous" 
-                draggable={false} // CRITICAL FIX: Disable native drag to allow touch pan/zoom on blobs
-                onDoubleClick={handleDoubleClick} // Enable double click zoom on desktop
-                onContextMenu={(e) => e.preventDefault()} // Disable context menu
+                key={activePhoto.id} ref={imgRef} src={activePhoto.url} alt={activePhoto.title} 
+                crossOrigin={activePhoto.url.startsWith('blob:') ? undefined : "anonymous"} 
+                draggable={false} 
+                onDragStart={(e) => e.preventDefault()} // CRITICAL: Prevent native drag start to fix imported blob gestures
+                onDoubleClick={handleDoubleClick} 
+                onContextMenu={(e) => e.preventDefault()} 
                 className={`max-w-full max-h-full object-contain pointer-events-auto ${exitingPhoto ? (direction === 'right' ? 'anim-slide-in-right' : 'anim-slide-in-left') : ''} ${isPickerActive ? 'cursor-crosshair' : (zoomLevel > 1 || cropModeActive ? (isDragging ? 'cursor-grabbing' : 'cursor-grab') : 'default')}`}
                 style={{ 
                    transform: viewMode === 'image-edit' ? `rotate(${editRotation}deg) scaleX(${editFlipX})` : undefined, 
                    touchAction: 'none', 
                    transition: isDragging || cropModeActive ? 'none' : 'transform 0.3s ease',
+                   // Force disable text/element selection and drag behavior
+                   WebkitUserSelect: 'none',
                    userSelect: 'none',
-                   WebkitUserSelect: 'none'
+                   // @ts-ignore
+                   WebkitTouchCallout: 'none',
+                   // @ts-ignore
+                   WebkitUserDrag: 'none' 
                 }}
               />
               {cropModeActive && (
@@ -741,7 +809,7 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
 
           {/* Picked Color Result */}
           {pickedColor && colorDetails && (
-            <div className="absolute bottom-24 lg:bottom-8 z-50 flex items-center gap-4 bg-white/95 backdrop-blur shadow-2xl p-3 pr-4 rounded-full animate-in zoom-in slide-in-from-bottom-4 border border-gray-100 mx-auto left-4 right-4 lg:left-auto lg:right-auto lg:min-w-[300px] justify-center">
+            <div className="absolute bottom-24 lg:bottom-8 z-50 flex items-center gap-4 bg-white/95 backdrop-blur shadow-2xl p-3 pr-4 rounded-full animate-in zoom-in slide-in-from-bottom-4 border border-gray-100 mx-auto left-4 right-4 lg:left-auto lg:right-auto lg:min-w-[300px] justify-center no-gesture-propagation">
                 <div className="w-10 h-10 rounded-full border-2 border-white shadow-sm shrink-0" style={{ backgroundColor: pickedColor }}></div>
                 <div className="flex flex-col gap-0.5 min-w-[80px]">
                     <div className="flex items-center gap-2"><span className="text-[10px] font-bold text-gray-400 w-6">HEX</span><span className="text-xs font-black text-gray-900 font-mono">{pickedColor}</span></div>
@@ -759,10 +827,10 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
           {viewMode === 'view' && zoomLevel <= 1 && (
               <>
                 <div className="absolute inset-y-0 left-0 flex items-center px-2 pointer-events-none z-40">
-                    {hasPrev ? <button onClick={(e) => { e.stopPropagation(); setDirection('left'); onPrev?.(); }} className="pointer-events-auto p-2 rounded-full bg-black/10 hover:bg-black/40 text-white/50 hover:text-white transition-all backdrop-blur-[2px]"><ChevronLeft size={32} /></button> : <div></div>}
+                    {hasPrev ? <button onClick={(e) => { e.stopPropagation(); setDirection('left'); onPrev?.(); }} className="pointer-events-auto p-2 rounded-full bg-black/10 hover:bg-black/40 text-white/50 hover:text-white transition-all backdrop-blur-[2px] no-gesture-propagation"><ChevronLeft size={32} /></button> : <div></div>}
                 </div>
                 <div className="absolute inset-y-0 right-0 flex items-center px-2 pointer-events-none z-40">
-                    {hasNext ? <button onClick={(e) => { e.stopPropagation(); setDirection('right'); onNext?.(); }} className="pointer-events-auto p-2 rounded-full bg-black/10 hover:bg-black/40 text-white/50 hover:text-white transition-all backdrop-blur-[2px]"><ChevronRight size={32} /></button> : <div></div>}
+                    {hasNext ? <button onClick={(e) => { e.stopPropagation(); setDirection('right'); onNext?.(); }} className="pointer-events-auto p-2 rounded-full bg-black/10 hover:bg-black/40 text-white/50 hover:text-white transition-all backdrop-blur-[2px] no-gesture-propagation"><ChevronRight size={32} /></button> : <div></div>}
                 </div>
               </>
           )}
