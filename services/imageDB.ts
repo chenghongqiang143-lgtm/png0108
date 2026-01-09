@@ -31,6 +31,18 @@ export const saveImageToDB = async (id: string, file: Blob): Promise<void> => {
   });
 };
 
+export const saveThumbnailToDB = async (id: string, file: Blob): Promise<void> => {
+  const db = await initDB();
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction([STORE_NAME], 'readwrite');
+    const store = transaction.objectStore(STORE_NAME);
+    const request = store.put(file, `${id}_thumb`);
+
+    request.onsuccess = () => resolve();
+    request.onerror = () => reject(request.error);
+  });
+};
+
 export const getImageFromDB = async (id: string): Promise<Blob | undefined> => {
   const db = await initDB();
   return new Promise((resolve, reject) => {
@@ -43,14 +55,27 @@ export const getImageFromDB = async (id: string): Promise<Blob | undefined> => {
   });
 };
 
+export const getThumbnailFromDB = async (id: string): Promise<Blob | undefined> => {
+  const db = await initDB();
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction([STORE_NAME], 'readonly');
+    const store = transaction.objectStore(STORE_NAME);
+    const request = store.get(`${id}_thumb`);
+
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+};
+
 export const deleteImageFromDB = async (id: string): Promise<void> => {
   const db = await initDB();
   return new Promise((resolve, reject) => {
     const transaction = db.transaction([STORE_NAME], 'readwrite');
     const store = transaction.objectStore(STORE_NAME);
-    const request = store.delete(id);
+    store.delete(id);
+    store.delete(`${id}_thumb`); // Also delete thumbnail
 
-    request.onsuccess = () => resolve();
-    request.onerror = () => reject(request.error);
+    transaction.oncomplete = () => resolve();
+    transaction.onerror = () => reject(transaction.error);
   });
 };

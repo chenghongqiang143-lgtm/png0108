@@ -4,8 +4,8 @@ import { PhotoModal } from './components/PhotoModal';
 import { ColorTool } from './components/ColorTool';
 import { NoteTool } from './components/NoteTool';
 import { Photo, Category, ThemeColor, ColorGroup } from './types';
-import { Search, Upload, ImagePlus, Menu, Edit2, Trash2, LayoutGrid, Grid3x3, Square, Folder, ChevronRight, Image as ImageIcon, Check, Loader2, Clock, X, CheckSquare, MousePointer2, Move, Tag, FolderInput, FileImage, HardDrive, Plus, FolderPlus } from 'lucide-react';
-import { saveImageToDB, getImageFromDB, deleteImageFromDB } from './services/imageDB';
+import { Search, Upload, ImagePlus, Menu, Edit2, Trash2, LayoutGrid, Grid3x3, Square, Folder, ChevronRight, Image as ImageIcon, Check, Loader2, Clock, X, CheckSquare, MousePointer2, Move, Tag, FolderInput, FileImage, HardDrive, Plus, FolderPlus, AlertTriangle } from 'lucide-react';
+import { saveImageToDB, getImageFromDB, deleteImageFromDB, saveThumbnailToDB, getThumbnailFromDB } from './services/imageDB';
 
 // Initial Dummy Data
 const INITIAL_CATEGORIES: Category[] = [
@@ -155,6 +155,53 @@ const groupPhotosByDate = (photos: Photo[]) => {
   });
 };
 
+// Thumbnail Generator Helper
+const generateThumbnail = (file: File): Promise<Blob> => {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.src = URL.createObjectURL(file);
+    img.onload = () => {
+      const canvas = document.createElement('canvas');
+      const ctx = canvas.getContext('2d');
+      const MAX_SIZE = 320; // 320px thumbnail
+      let width = img.width;
+      let height = img.height;
+      if (width > height) {
+        if (width > MAX_SIZE) {
+          height *= MAX_SIZE / width;
+          width = MAX_SIZE;
+        }
+      } else {
+        if (height > MAX_SIZE) {
+          width *= MAX_SIZE / height;
+          height = MAX_SIZE;
+        }
+      }
+      canvas.width = width;
+      canvas.height = height;
+      if (ctx) {
+          ctx.drawImage(img, 0, 0, width, height);
+          canvas.toBlob((blob) => {
+            URL.revokeObjectURL(img.src);
+            resolve(blob!);
+          }, 'image/jpeg', 0.7);
+      } else {
+          URL.revokeObjectURL(img.src);
+          resolve(file); // Fallback to original
+      }
+    };
+    img.onerror = () => {
+        URL.revokeObjectURL(img.src);
+        resolve(file);
+    };
+  });
+};
+
+const ALL_THEME_COLORS: ThemeColor[] = [
+    'zinc', 'blue', 'indigo', 'rose', 'orange', 'emerald', 
+    'cyan', 'violet', 'fuchsia', 'lime', 'amber', 'teal', 'sky'
+];
+
 const App: React.FC = () => {
   // --- States ---
   const [isLoading, setIsLoading] = useState(true);
@@ -268,7 +315,11 @@ const App: React.FC = () => {
       await Promise.all(updatedPhotos.map(async (photo, index) => {
         if (!photo.url.startsWith('http')) {
             try {
-                const blob = await getImageFromDB(photo.id);
+                // Try to load thumbnail first for speed
+                let blob = await getThumbnailFromDB(photo.id);
+                // Fallback to full image if no thumbnail
+                if (!blob) blob = await getImageFromDB(photo.id);
+                
                 if (blob) {
                     const newUrl = URL.createObjectURL(blob);
                     updatedPhotos[index] = { ...photo, url: newUrl };
@@ -294,6 +345,27 @@ const App: React.FC = () => {
         });
     };
   }, []);
+  
+  // Lazy load full quality image when modal opens
+  useEffect(() => {
+      if (selectedPhoto && selectedPhoto.id) {
+          let isMounted = true;
+          // Trigger async load of full image
+          getImageFromDB(selectedPhoto.id).then(blob => {
+              if (isMounted && blob) {
+                  const fullUrl = URL.createObjectURL(blob);
+                  setSelectedPhoto(prev => {
+                      // Only update if url is different (to update from thumb to full)
+                      if (prev && prev.id === selectedPhoto.id && prev.url !== fullUrl) {
+                           return { ...prev, url: fullUrl };
+                      }
+                      return prev;
+                  });
+              }
+          });
+          return () => { isMounted = false; };
+      }
+  }, [selectedPhoto?.id]);
 
   useEffect(() => {
     localStorage.setItem('photos', JSON.stringify(photos));
@@ -312,27 +384,12 @@ const App: React.FC = () => {
   };
 
   // Helper to close modal via UI (Cross Button / Backdrop)
-  // This calls history.back() which triggers the popstate listener below to actually update state.
   const closeModal = () => {
       window.history.back();
   };
 
   useEffect(() => {
     const handlePopState = (e: PopStateEvent) => {
-      // Logic to close the top-most modal based on React State priority
-      // We check state directly here.
-      // NOTE: Since state inside event listener might be stale if not careful, 
-      // we rely on the fact that this re-binds on render or we check multiple flags.
-      // However, React batching usually handles this.
-      
-      // A safe way is to check all potential open states and close the most relevant one.
-      
-      // Using a ref to access current state inside event listener if needed, 
-      // but simplistic checking works for standard "back" behavior.
-      
-      // We just try to close everything that might be open.
-      // If nothing is open, the browser just goes back (exits app).
-      
       let handled = false;
 
       if (selectedPhoto) {
@@ -358,8 +415,6 @@ const App: React.FC = () => {
         setSelectedIds(new Set());
         handled = true;
       }
-      
-      // If we didn't handle anything (no modals open), the default browser back happens (exit)
     };
 
     window.addEventListener('popstate', handlePopState);
@@ -509,13 +564,26 @@ const App: React.FC = () => {
          await Promise.all(chunk.map(async (file) => {
              try {
                 const newPhotoId = crypto.randomUUID();
+                
+                // Save original
                 await saveImageToDB(newPhotoId, file);
-                const objectUrl = URL.createObjectURL(file);
+                
+                // Generate and save thumbnail
+                let displayUrl;
+                try {
+                    const thumbBlob = await generateThumbnail(file);
+                    await saveThumbnailToDB(newPhotoId, thumbBlob);
+                    displayUrl = URL.createObjectURL(thumbBlob);
+                } catch (e) {
+                    console.warn("Thumbnail failed, using original", e);
+                    displayUrl = URL.createObjectURL(file);
+                }
+
                 const title = file.name.replace(/\.[^/.]+$/, "");
 
                 const newPhoto: Photo = {
                   id: newPhotoId,
-                  url: objectUrl,
+                  url: displayUrl, // Use thumbnail URL for grid
                   title: title,
                   description: '',
                   tags: [],
@@ -560,6 +628,28 @@ const App: React.FC = () => {
     if (selectedPhoto) closeModal();
   };
 
+  const handleDeleteAllPhotos = async () => {
+      if (confirm('警告：此操作将永久删除所有照片！\n相册分类和标签将被保留。\n\n确定要继续吗？')) {
+          if (confirm('再次确认：删除所有照片无法恢复。')) {
+              setIsLoading(true);
+              try {
+                  // Delete all images from IndexedDB
+                  await Promise.all(photos.map(p => deleteImageFromDB(p.id)));
+                  // Clear photos state
+                  setPhotos([]);
+                  setFailedImages(new Set());
+                  closeModal(); // Close Settings
+                  alert('所有照片已删除');
+              } catch (e) {
+                  console.error("Failed to delete all photos", e);
+                  alert('删除过程中出现错误');
+              } finally {
+                  setIsLoading(false);
+              }
+          }
+      }
+  };
+
   const handleBatchDelete = async () => {
     if (batchDeleteConfirm) {
       if (selectedCategory === 'favorites') {
@@ -586,23 +676,10 @@ const App: React.FC = () => {
 
   const confirmBatchMove = (targetCategoryId: string) => {
     setPhotos(prev => prev.map(p => selectedIds.has(p.id) ? { ...p, categoryId: targetCategoryId } : p));
-    closeModal(); // Closes Move Modal
-    // We also close selection mode for better UX? Or keep it?
-    // User usually wants to verify. Let's close selection mode via another back, 
-    // or just let them stay. Let's clear selection.
+    closeModal();
     setSelectedIds(new Set());
     setIsSelectionMode(false);
-    // Note: closeModal() only pops once. If selection mode also pushed state, we might need another pop?
-    // Actually, `setIsSelectionMode(false)` manually works, but we should align with history.
-    // If we want to fully exit selection mode, we can assume the user is done.
-    // However, our history stack is: [SelectionMode] -> [BatchMove].
-    // `closeModal` pops [BatchMove]. We are back to [SelectionMode].
-    // So we manually set isSelectionMode(false) AND history.back() again?
-    // To keep it simple: We just clear the UI state. 
-    // The history entry for selection mode remains until user presses back again.
-    // That's acceptable. Or we can force double back.
-    window.history.back(); // Hack to close selection mode too? 
-    // No, manual state update is safer to avoid race conditions.
+    window.history.back();
   };
 
   // -- Batch Tag Logic --
@@ -627,10 +704,10 @@ const App: React.FC = () => {
         return p;
     }));
     
-    closeModal(); // Close Tag Modal
+    closeModal();
     setSelectedIds(new Set());
     setIsSelectionMode(false);
-    window.history.back(); // Close Selection Mode
+    window.history.back();
   };
 
   const toggleBatchTagSelection = (tag: string) => {
@@ -793,8 +870,6 @@ const App: React.FC = () => {
     }
   };
 
-  // --- Render ---
-
   if (isLoading) {
     return (
       <div className="h-screen w-full flex items-center justify-center bg-gray-50 flex-col gap-4">
@@ -825,10 +900,8 @@ const App: React.FC = () => {
         themeColor={themeColor}
       />
 
-      {/* Main Content */}
       <main className="flex-1 flex flex-col h-full overflow-hidden w-full relative transition-all duration-300">
         
-        {/* Header */}
         <header className="bg-white/80 backdrop-blur-md border-b border-slate-200 sticky top-0 z-30 pt-safe">
           <div className="flex items-center justify-between px-4 py-3 md:px-6 md:py-4">
             <div className="flex items-center gap-3 md:hidden">
@@ -876,7 +949,6 @@ const App: React.FC = () => {
             <div className="flex items-center gap-2 md:gap-4 shrink-0">
                {!isToolView && (
                  <>
-                   {/* Selection Mode Toggle */}
                    <button 
                      onClick={() => {
                         if (isSelectionMode) {
@@ -891,7 +963,6 @@ const App: React.FC = () => {
                      <CheckSquare size={20} />
                    </button>
                    
-                   {/* Desktop Search Trigger */}
                    <div className="hidden md:block relative">
                        <button onClick={() => setIsSearchFocused(true)} className="p-2 text-slate-500 hover:bg-slate-100 rounded-full transition-colors">
                          <Search size={20} />
@@ -934,7 +1005,6 @@ const App: React.FC = () => {
             </div>
           </div>
           
-          {/* Quick Filters / Search History when focused */}
           {isSearchFocused && recentSearches.length > 0 && !searchQuery && (
              <div className="absolute top-full left-0 right-0 bg-white border-b border-slate-200 p-4 shadow-lg animate-fade-in z-20">
                <div className="flex items-center gap-2 mb-2 text-xs font-bold text-slate-400 uppercase tracking-widest">
@@ -955,7 +1025,6 @@ const App: React.FC = () => {
           )}
         </header>
 
-        {/* Content Area */}
         {selectedCategory === 'tool-color' ? (
            <ColorTool groups={colorGroups} onUpdateGroups={setColorGroups} />
         ) : selectedCategory === 'tool-note' ? (
@@ -963,7 +1032,6 @@ const App: React.FC = () => {
         ) : (
           <div className="flex-1 overflow-y-auto p-2 md:p-6 pb-24 md:pb-6 custom-scrollbar">
             
-            {/* Processing Indicator */}
             {isProcessing && (
                <div className="fixed top-20 left-1/2 -translate-x-1/2 z-50 bg-black/80 text-white px-6 py-3 rounded-full flex items-center gap-3 backdrop-blur-md shadow-xl animate-in fade-in slide-in-from-top-4">
                   <Loader2 size={20} className="animate-spin" />
@@ -971,7 +1039,6 @@ const App: React.FC = () => {
                </div>
             )}
 
-            {/* Selection Toolbar */}
             {isSelectionMode && (
               <div className="sticky top-0 z-20 mb-4 bg-slate-900 text-white p-3 shadow-md flex justify-between items-center rounded-none animate-in slide-in-from-top-2">
                  <div className="flex items-center gap-4">
@@ -1045,7 +1112,6 @@ const App: React.FC = () => {
                              </div>
                           </div>
 
-                          {/* Selection Checkbox */}
                           {isSelectionMode && (
                              <div className={`absolute top-2 right-2 w-6 h-6 rounded-full border-2 border-white flex items-center justify-center transition-colors ${selectedIds.has(photo.id) ? 'bg-slate-900 border-slate-900' : 'bg-black/30'}`}>
                                 {selectedIds.has(photo.id) && <Check size={14} className="text-white" />}
@@ -1062,7 +1128,7 @@ const App: React.FC = () => {
         )}
       </main>
 
-      {/* Upload Bottom Sheet */}
+      {/* Modals and Sheets... */}
       {isUploadMenuOpen && (
         <div className="fixed inset-0 z-[60] flex items-end justify-center bg-black/40 backdrop-blur-sm animate-in fade-in" onClick={closeModal}>
             <div className="bg-white w-full max-w-md p-4 rounded-t-xl shadow-2xl animate-in slide-in-from-bottom-full duration-300 flex flex-col gap-2 pb-safe" onClick={e => e.stopPropagation()}>
@@ -1099,7 +1165,7 @@ const App: React.FC = () => {
         </div>
       )}
 
-      {/* BATCH MOVE DIALOG */}
+      {/* Batch Modals */}
       {isBatchMoveOpen && (
         <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/60 backdrop-blur-sm animate-in fade-in" onClick={closeModal}>
             <div className="bg-white w-full max-w-md p-6 m-4 shadow-2xl rounded-none animate-in zoom-in-95 duration-200" onClick={e => e.stopPropagation()}>
@@ -1131,7 +1197,6 @@ const App: React.FC = () => {
         </div>
       )}
 
-      {/* BATCH TAG DIALOG */}
       {isBatchTagOpen && (
         <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/60 backdrop-blur-sm animate-in fade-in" onClick={closeModal}>
              <div className="bg-white w-full max-w-md p-6 m-4 shadow-2xl rounded-none animate-in zoom-in-95 duration-200" onClick={e => e.stopPropagation()}>
@@ -1186,17 +1251,16 @@ const App: React.FC = () => {
         </div>
       )}
 
-      {/* Settings Modal */}
       {isSettingsOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm animate-fade-in" onClick={closeModal}>
            <div className="bg-white p-8 w-full max-w-sm shadow-2xl rounded-none relative" onClick={e => e.stopPropagation()}>
               <button onClick={closeModal} className="absolute top-4 right-4 text-slate-400 hover:text-slate-900"><X size={20}/></button>
               <h2 className="text-xl font-black text-slate-900 mb-6 uppercase tracking-tight">应用设置</h2>
               
-              <div className="mb-6">
+              <div className="mb-8">
                  <label className="text-xs font-bold text-slate-400 uppercase tracking-widest block mb-3">主题色</label>
                  <div className="flex flex-wrap gap-2">
-                    {['zinc', 'blue', 'indigo', 'rose', 'orange', 'emerald'].map((color) => (
+                    {ALL_THEME_COLORS.map((color) => (
                        <button
                          key={color}
                          onClick={() => setThemeColor(color as ThemeColor)}
@@ -1206,6 +1270,17 @@ const App: React.FC = () => {
                     ))}
                  </div>
               </div>
+
+              <div className="mb-8">
+                 <label className="text-xs font-bold text-red-400 uppercase tracking-widest block mb-3">危险区域</label>
+                 <button 
+                    onClick={handleDeleteAllPhotos}
+                    className="w-full flex items-center justify-center gap-2 py-3 bg-red-50 hover:bg-red-100 text-red-600 font-bold text-sm uppercase tracking-wider border border-red-200 transition-colors rounded-none"
+                 >
+                    <AlertTriangle size={16} /> 删除所有照片
+                 </button>
+                 <p className="text-[10px] text-slate-400 mt-2 text-center">将保留所有相册分类和标签设置，仅删除图片文件。</p>
+              </div>
               
               <div className="border-t border-slate-100 pt-6">
                  <p className="text-xs text-slate-400 text-center">Version 1.2.0 (Standalone)</p>
@@ -1214,7 +1289,6 @@ const App: React.FC = () => {
         </div>
       )}
 
-      {/* Photo Detail Modal */}
       <PhotoModal 
         photo={selectedPhoto}
         categories={categories}

@@ -301,16 +301,18 @@ export const ColorTool: React.FC<ColorToolProps> = ({ groups, onUpdateGroups }) 
             {isAddingGroup && (
             <div className="mb-6 p-4 bg-gray-50 border border-gray-200 animate-fade-in rounded-none">
                 <h4 className="text-xs font-bold text-gray-700 mb-3 uppercase">新建组名</h4>
-                <div className="flex gap-0">
-                <input 
-                    type="text" 
-                    value={newGroupName}
-                    onChange={(e) => setNewGroupName(e.target.value)}
-                    placeholder="名称"
-                    className="flex-1 border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:border-black rounded-none"
-                />
-                <button onClick={handleCreateGroup} className="bg-black text-white px-5 py-2 text-xs font-bold hover:bg-gray-800 uppercase rounded-none whitespace-nowrap">创建</button>
-                <button onClick={() => setIsAddingGroup(false)} className="bg-white border border-l-0 border-gray-300 text-gray-700 px-5 py-2 text-xs font-bold hover:bg-gray-50 uppercase rounded-none whitespace-nowrap">取消</button>
+                <div className="flex gap-0 flex-wrap sm:flex-nowrap">
+                  <input 
+                      type="text" 
+                      value={newGroupName}
+                      onChange={(e) => setNewGroupName(e.target.value)}
+                      placeholder="名称"
+                      className="flex-1 w-full sm:w-auto border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:border-black rounded-none min-w-[120px]"
+                  />
+                  <div className="flex flex-1 sm:flex-initial w-full sm:w-auto">
+                    <button onClick={handleCreateGroup} className="flex-1 sm:flex-initial bg-black text-white px-5 py-2 text-xs font-bold hover:bg-gray-800 uppercase rounded-none whitespace-nowrap">创建</button>
+                    <button onClick={() => setIsAddingGroup(false)} className="flex-1 sm:flex-initial bg-white border border-l-0 border-gray-300 text-gray-700 px-5 py-2 text-xs font-bold hover:bg-gray-50 uppercase rounded-none whitespace-nowrap">取消</button>
+                  </div>
                 </div>
             </div>
             )}

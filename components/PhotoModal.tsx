@@ -177,8 +177,8 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
       tags: finalTags
     });
     setIsEditing(false);
-    if (window.innerWidth < 768) {
-       setShowMobileInfo(false); // Close sheet on save for mobile
+    if (window.innerWidth < 1024) { // Updated breakpoint
+       setShowMobileInfo(false); // Close sheet on save for mobile/tablet
     }
   };
   
@@ -226,8 +226,8 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
   };
 
   const handleMobileImageTap = () => {
-      // Toggle controls on mobile
-      if (window.innerWidth < 768) {
+      // Toggle controls on mobile/tablet
+      if (window.innerWidth < 1024) { // Updated breakpoint
           setShowMobileControls(!showMobileControls);
           if (showMobileInfo) setShowMobileInfo(false); // tapping image closes info sheet
       }
@@ -389,27 +389,27 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
   const tagSuggestions = availableTags.filter(t => !currentTags.includes(t) && t.toLowerCase().includes(newTag.toLowerCase())).slice(0, 10);
 
   return (
-    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black md:bg-black/90 md:backdrop-blur-md md:p-12 animate-in fade-in duration-200 overflow-hidden">
+    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black lg:bg-black/90 lg:backdrop-blur-md lg:p-12 animate-in fade-in duration-200 overflow-hidden">
       
-      {/* Main Container */}
-      <div className="bg-black w-full h-full md:h-auto md:max-h-[85vh] md:max-w-6xl flex flex-col md:flex-row md:shadow-2xl relative md:rounded-lg overflow-hidden">
+      {/* Main Container - Switched from md: to lg: for better tablet support */}
+      <div className="bg-black w-full h-full lg:h-auto lg:max-h-[85vh] lg:max-w-6xl flex flex-col lg:flex-row lg:shadow-2xl relative lg:rounded-lg overflow-hidden">
         
         {/* IMAGE SECTION */}
         <div 
             ref={imgContainerRef}
-            className={`w-full h-full md:w-2/3 bg-black flex items-center justify-center relative group shrink-0 overflow-hidden md:rounded-l-lg`}
+            className={`w-full h-full lg:w-2/3 bg-black flex items-center justify-center relative group shrink-0 overflow-hidden lg:rounded-l-lg`}
         >
           
-          {/* Mobile Top Bar */}
-          <div className={`absolute top-0 inset-x-0 p-4 z-30 flex justify-between items-start md:hidden pt-safe transition-opacity duration-300 ${showMobileControls ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}>
+          {/* Mobile Top Bar (Visible up to lg breakpoint) */}
+          <div className={`absolute top-0 inset-x-0 p-4 z-30 flex justify-between items-start lg:hidden pt-safe transition-opacity duration-300 ${showMobileControls ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}>
               <button onClick={onClose} className="mt-4 p-2.5 text-white/90 bg-black/20 backdrop-blur-md rounded-full active:bg-black/40">
                   <ChevronLeft size={24} />
               </button>
               {/* Optional: Add more top controls here if needed */}
           </div>
 
-          {/* Mobile Bottom Bar */}
-          <div className={`absolute bottom-0 inset-x-0 z-30 flex justify-around items-center md:hidden pb-safe pt-6 bg-gradient-to-t from-black/90 via-black/50 to-transparent transition-transform duration-300 ${showMobileControls && !showMobileInfo ? 'translate-y-0' : 'translate-y-full'}`}>
+          {/* Mobile Bottom Bar (Visible up to lg breakpoint) */}
+          <div className={`absolute bottom-0 inset-x-0 z-30 flex justify-around items-center lg:hidden pb-safe pt-6 bg-gradient-to-t from-black/90 via-black/50 to-transparent transition-transform duration-300 ${showMobileControls && !showMobileInfo ? 'translate-y-0' : 'translate-y-full'}`}>
               <button onClick={() => setShowMobileInfo(true)} className="p-4 text-white/90 flex flex-col items-center gap-1 active:scale-95 transition-transform">
                   <Info size={24} strokeWidth={1.5} />
                   <span className="text-[10px] font-medium opacity-80">信息</span>
@@ -417,6 +417,10 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
               <button onClick={handleToggleFavorite} className={`p-4 flex flex-col items-center gap-1 active:scale-95 transition-transform ${photo.isFavorite ? 'text-red-500' : 'text-white/90'}`}>
                   <Heart size={24} className={photo.isFavorite ? 'fill-current' : ''} strokeWidth={1.5} />
                   <span className="text-[10px] font-medium opacity-80">收藏</span>
+              </button>
+              <button onClick={() => setIsPickerActive(!isPickerActive)} className={`p-4 flex flex-col items-center gap-1 active:scale-95 transition-transform ${isPickerActive ? 'text-indigo-400' : 'text-white/90'}`}>
+                  <Pipette size={24} strokeWidth={1.5} className={isPickerActive ? 'fill-current' : ''} />
+                  <span className="text-[10px] font-medium opacity-80">取色</span>
               </button>
               <button onClick={() => { setIsEditing(true); setShowMobileInfo(true); }} className="p-4 text-white/90 flex flex-col items-center gap-1 active:scale-95 transition-transform">
                   <Edit2 size={24} strokeWidth={1.5} />
@@ -428,8 +432,8 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
               </button>
           </div>
 
-          {/* Desktop Controls (Zoom & Close) */}
-          <div className="hidden md:flex absolute top-0 inset-x-0 z-30 justify-end p-4 pt-8 gap-3 pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity">
+          {/* Desktop Controls (Zoom & Close) - Visible only on LG+ */}
+          <div className="hidden lg:flex absolute top-0 inset-x-0 z-30 justify-end p-4 pt-8 gap-3 pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity">
                 <div className="flex gap-2 bg-black/50 p-1.5 rounded-full backdrop-blur-md pointer-events-auto">
                     <button onClick={handleZoomOut} className="p-2 text-white/90 hover:text-white hover:bg-white/20 rounded-full transition-colors" title="缩小">
                         <ZoomOut size={20} />
@@ -476,8 +480,8 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
             }}
           />
           
-          {/* Mobile Overlay: Zoom hint when zoomed in */}
-          {zoomLevel > 1 && window.innerWidth < 768 && (
+          {/* Mobile Overlay: Zoom hint when zoomed in (Updated for tablet) */}
+          {zoomLevel > 1 && window.innerWidth < 1024 && (
              <div className="absolute top-4 left-1/2 -translate-x-1/2 bg-black/50 text-white px-3 py-1 rounded-full text-xs backdrop-blur-sm pointer-events-none">
                 {Math.round(zoomLevel * 100)}%
              </div>
@@ -492,7 +496,7 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
 
           {/* Picked Color Result Overlay */}
           {pickedColor && colorDetails && (
-            <div className="absolute bottom-24 md:bottom-8 z-30 flex items-center gap-4 bg-white/95 backdrop-blur shadow-2xl p-3 pr-4 rounded-full animate-in zoom-in slide-in-from-bottom-4 border border-gray-100 mx-auto left-4 right-4 md:left-auto md:right-auto md:min-w-[300px] justify-center">
+            <div className="absolute bottom-24 lg:bottom-8 z-30 flex items-center gap-4 bg-white/95 backdrop-blur shadow-2xl p-3 pr-4 rounded-full animate-in zoom-in slide-in-from-bottom-4 border border-gray-100 mx-auto left-4 right-4 lg:left-auto lg:right-auto lg:min-w-[300px] justify-center">
                 <div className="w-10 h-10 rounded-full border-2 border-white shadow-sm shrink-0" style={{ backgroundColor: pickedColor }}></div>
                 <div className="flex flex-col gap-0.5 min-w-[80px]">
                     <div className="flex items-center gap-2">
@@ -531,30 +535,30 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
           </div>
         </div>
 
-        {/* DETAILS SECTION - Responsive: Sidebar on Desktop, Bottom Sheet on Mobile */}
+        {/* DETAILS SECTION - Responsive: Sidebar on Desktop, Bottom Sheet on Mobile/Tablet */}
         <div 
           className={`
              flex flex-col bg-white
-             md:w-1/3 md:h-full md:relative md:translate-y-0
-             fixed inset-x-0 bottom-0 z-[70] md:z-auto rounded-none
+             lg:w-1/3 lg:h-full lg:relative lg:translate-y-0
+             fixed inset-x-0 bottom-0 z-[70] lg:z-auto rounded-none
              transition-transform duration-300 ease-out
-             ${showMobileInfo ? 'translate-y-0' : 'translate-y-full md:translate-y-0'}
-             max-h-[85vh] md:max-h-full shadow-[0_-10px_40px_rgba(0,0,0,0.3)] md:shadow-none
+             ${showMobileInfo ? 'translate-y-0' : 'translate-y-full lg:translate-y-0'}
+             max-h-[85vh] lg:max-h-full shadow-[0_-10px_40px_rgba(0,0,0,0.3)] lg:shadow-none
              pb-safe
           `}
         >
           {/* Mobile Drag Handle */}
-          <div className="md:hidden w-full flex justify-center py-3 shrink-0" onClick={() => !isEditing && setShowMobileInfo(false)}>
+          <div className="lg:hidden w-full flex justify-center py-3 shrink-0" onClick={() => !isEditing && setShowMobileInfo(false)}>
               <div className="w-10 h-1 bg-gray-300 rounded-full"></div>
           </div>
 
           {/* Header */}
-          <div className="px-6 py-4 md:p-6 border-b border-gray-100 flex justify-between items-center shrink-0">
+          <div className="px-6 py-4 lg:p-6 border-b border-gray-100 flex justify-between items-center shrink-0">
             <div className="flex items-center gap-2">
                 {/* Desktop Buttons */}
-                <div className="hidden md:flex items-center gap-3">
-                    <button onClick={() => setIsPickerActive(!isPickerActive)} className={`flex items-center gap-1 text-xs font-bold uppercase tracking-wider ${isPickerActive ? 'text-indigo-600' : 'text-gray-400 hover:text-indigo-600'}`}>
-                       <Pipette size={16} /> 取色器
+                <div className="hidden lg:flex items-center gap-6">
+                    <button onClick={() => setIsPickerActive(!isPickerActive)} className={`p-1 ${isPickerActive ? 'text-indigo-600' : 'text-gray-400 hover:text-indigo-600'}`} title="取色器">
+                       <Pipette size={16} />
                     </button>
                     <button onClick={toggleFullscreen} className="text-gray-400 hover:text-black" title="全屏"><Maximize size={16}/></button>
                     <button onClick={handleToggleFavorite} className={`text-gray-400 hover:text-red-500 ${photo.isFavorite ? 'text-red-500' : ''}`}><Heart size={16} className={photo.isFavorite?'fill-current':''}/></button>
@@ -562,13 +566,13 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
                     <button onClick={() => setIsEditing(true)} className="text-gray-400 hover:text-gray-900"><Edit2 size={16}/></button>
                 </div>
                 {/* Mobile Title */}
-                <span className="md:hidden text-xs font-bold text-gray-400 uppercase tracking-widest">照片信息</span>
+                <span className="lg:hidden text-xs font-bold text-gray-400 uppercase tracking-widest">照片信息</span>
             </div>
             
             {/* Close Button - Desktop: closes modal. Mobile: closes sheet */}
             <button 
                 onClick={() => {
-                    if (window.innerWidth < 768) setShowMobileInfo(false);
+                    if (window.innerWidth < 1024) setShowMobileInfo(false);
                     else onClose();
                 }}
                 className="text-gray-400 hover:text-gray-900 p-1"
@@ -685,10 +689,10 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
           </div>
           
           {/* Footer Actions (Only visible in Edit Mode or Desktop Footer) */}
-          <div className={`p-6 border-t border-gray-100 bg-gray-50 shrink-0 gap-3 ${isEditing ? 'flex' : 'hidden md:flex'}`}>
+          <div className={`p-6 border-t border-gray-100 bg-gray-50 shrink-0 gap-3 ${isEditing ? 'flex' : 'hidden lg:flex'}`}>
             {isEditing ? (
               <>
-                 <button onClick={() => { setIsEditing(false); if(window.innerWidth<768) setShowMobileInfo(false); }} className="flex-1 py-3 bg-white border border-gray-300 font-bold text-gray-700 hover:bg-gray-50 uppercase text-xs tracking-wider rounded-none">
+                 <button onClick={() => { setIsEditing(false); if(window.innerWidth<1024) setShowMobileInfo(false); }} className="flex-1 py-3 bg-white border border-gray-300 font-bold text-gray-700 hover:bg-gray-50 uppercase text-xs tracking-wider rounded-none">
                   取消
                 </button>
                 <button onClick={handleSave} className="flex-1 py-3 bg-black border border-transparent font-bold text-white hover:bg-gray-800 uppercase text-xs tracking-wider rounded-none">
