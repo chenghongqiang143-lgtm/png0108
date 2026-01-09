@@ -273,7 +273,8 @@ export const NoteTool: React.FC = () => {
             // Convert to todo item
             const newDiv = document.createElement('div');
             newDiv.className = 'todo-item';
-            newDiv.style.cssText = 'display: flex; align-items: center;';
+            // Use min-height: 2em to match the line-height: 2 setting, preventing collapse on empty lines
+            newDiv.style.cssText = 'display: flex; align-items: center; min-height: 2em;';
             newDiv.innerHTML = `<input type="checkbox" style="margin-right: 8px;" />${block.innerHTML}`;
             block.replaceWith(newDiv);
             
@@ -285,7 +286,7 @@ export const NoteTool: React.FC = () => {
         }
     } else {
         // Insert new checkbox at root (fallback)
-        const html = '<div class="todo-item" style="display: flex; align-items: center;"><input type="checkbox" style="margin-right: 8px;" /></div>';
+        const html = '<div class="todo-item" style="display: flex; align-items: center; min-height: 2em;"><input type="checkbox" style="margin-right: 8px;" /></div>';
         document.execCommand('insertHTML', false, html);
     }
     
@@ -318,15 +319,13 @@ export const NoteTool: React.FC = () => {
         newRow.className = 'todo-item';
         newRow.style.display = 'flex';
         newRow.style.alignItems = 'center';
+        // Ensure proper height for empty lines
+        newRow.style.minHeight = '2em';
         
         const checkbox = document.createElement('input');
         checkbox.type = 'checkbox';
         checkbox.style.marginRight = '8px';
         newRow.appendChild(checkbox);
-        
-        // Ensure valid caret position by appending a zero-width space or break if needed,
-        // but user specifically asked to remove "space", so we append nothing extra if possible
-        // or a <br> if it collapses.
         
         if (todoItem.nextSibling) {
             todoItem.parentNode?.insertBefore(newRow, todoItem.nextSibling);
@@ -444,7 +443,7 @@ export const NoteTool: React.FC = () => {
              onKeyDown={handleKeyDown}
              onInput={handleSave}
              onBlur={handleSave}
-             style={{ whiteSpace: 'pre-wrap', lineHeight: '1.5' }}
+             style={{ whiteSpace: 'pre-wrap', lineHeight: '2' }}
            />
         </div>
       </div>

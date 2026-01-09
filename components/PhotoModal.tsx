@@ -121,7 +121,8 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
       viewMode: 'view' as 'view' | 'meta-edit' | 'image-edit',
       cropModeActive: false,
       hasPrev: false,
-      hasNext: false
+      hasNext: false,
+      showMobileInfo: false
   });
 
   // Sync refs with state for event listeners
@@ -135,9 +136,10 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
           viewMode,
           cropModeActive,
           hasPrev: !!hasPrev,
-          hasNext: !!hasNext
+          hasNext: !!hasNext,
+          showMobileInfo
       };
-  }, [zoomLevel, pan, isDragging, swipeOffset, isPickerActive, viewMode, cropModeActive, hasPrev, hasNext]);
+  }, [zoomLevel, pan, isDragging, swipeOffset, isPickerActive, viewMode, cropModeActive, hasPrev, hasNext, showMobileInfo]);
 
   // Native Gesture Handling
   useEffect(() => {
@@ -150,6 +152,7 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
         initialZoom: 1,
         startPan: { x: 0, y: 0 },
         startTouch: { x: 0, y: 0 },
+        startTime: 0, // Track tap duration
         isPinching: false,
         isDragging: false
     };
@@ -168,8 +171,11 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
             return;
         }
 
+        // AGGRESSIVELY Prevent default to stop ghost dragging of images on mobile (especially Blobs)
+        // This is safe because we implement our own Pan/Zoom/Tap logic.
+        if (e.cancelable) e.preventDefault(); 
+
         if (e.touches.length === 2) {
-            e.preventDefault(); // Crucial to prevent browser native zoom/pan interference
             gesture.isPinching = true;
             gesture.initialDist = getDistance(e.touches);
             gesture.initialZoom = state.zoomLevel;
@@ -178,6 +184,7 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
             gesture.isDragging = true;
             gesture.startTouch = { x: e.touches[0].clientX, y: e.touches[0].clientY };
             gesture.startPan = { ...state.pan };
+            gesture.startTime = Date.now();
             setIsDragging(true);
         }
     };
@@ -228,13 +235,12 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
         }
 
         if (e.touches.length === 0) {
+            const now = Date.now();
             gesture.isDragging = false;
             setIsDragging(false);
 
             // Double Tap to Zoom Detection
-            const now = Date.now();
             if (now - lastTapRef.current < 300) {
-                e.preventDefault();
                 if (state.zoomLevel > 1) {
                     setZoomLevel(1);
                     setPan({x: 0, y: 0});
@@ -244,6 +250,19 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
                 }
                 lastTapRef.current = 0;
             } else {
+                // Potential Single Tap (Manual implementation since we preventDefault on start)
+                const dx = e.changedTouches[0].clientX - gesture.startTouch.x;
+                const dy = e.changedTouches[0].clientY - gesture.startTouch.y;
+                const dist = Math.hypot(dx, dy);
+
+                if (dist < 10) {
+                    // It is a tap
+                    if (!state.isPickerActive && window.innerWidth < 1024) {
+                        // Toggle mobile controls
+                        setShowMobileControls(prev => !prev);
+                        if (state.showMobileInfo) setShowMobileInfo(false);
+                    }
+                }
                 lastTapRef.current = now;
             }
 
@@ -294,6 +313,11 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
     };
 
   }, [isOpen]); 
+
+  // Auto hide controls on zoom for better view
+  useEffect(() => {
+     if (zoomLevel > 1) setShowMobileControls(false);
+  }, [zoomLevel]);
 
   // Sync logic for switching photos
   useEffect(() => {
@@ -498,6 +522,19 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
     });
   };
 
+  // Double click handler for desktop
+  const handleDoubleClick = (e: React.MouseEvent) => {
+    if (viewMode !== 'view') return;
+    
+    if (zoomLevel > 1) {
+        setZoomLevel(1);
+        setPan({ x: 0, y: 0 });
+    } else {
+        setZoomLevel(2.5);
+        setPan({ x: 0, y: 0 });
+    }
+  };
+
   const extractColor = (clientX: number, clientY: number) => {
     if (!imgRef.current) return;
     const img = imgRef.current;
@@ -535,9 +572,8 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
 
   const handleMouseUp = () => setIsDragging(false);
 
-  const handleImageClick = (e: React.MouseEvent) => {
-    if (!isPickerActive) handleMobileImageTap();
-  };
+  // Note: We disabled onClick on img to support manual tap detection
+  // const handleImageClick = ...
 
   const currentCategory = categories.find(c => c.id === photo.categoryId);
   const tagSuggestions = availableTags.filter(t => !photo.tags.includes(t) && t.toLowerCase().includes(newTag.toLowerCase())).slice(0, 10);
@@ -671,10 +707,17 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
           <div className="relative w-full h-full flex items-center justify-center overflow-hidden pointer-events-none" style={{ transform: exitingPhoto ? undefined : `translate(${pan.x + swipeOffset}px, ${pan.y}px) scale(${zoomLevel})`, transition: isDragging || swipeOffset !== 0 ? 'none' : 'transform 0.2s ease-out' }}>
               <img 
                 key={activePhoto.id} ref={imgRef} src={activePhoto.url} alt={activePhoto.title} crossOrigin="anonymous" 
-                onClick={handleImageClick}
                 draggable={false} // CRITICAL FIX: Disable native drag to allow touch pan/zoom on blobs
+                onDoubleClick={handleDoubleClick} // Enable double click zoom on desktop
+                onContextMenu={(e) => e.preventDefault()} // Disable context menu
                 className={`max-w-full max-h-full object-contain pointer-events-auto ${exitingPhoto ? (direction === 'right' ? 'anim-slide-in-right' : 'anim-slide-in-left') : ''} ${isPickerActive ? 'cursor-crosshair' : (zoomLevel > 1 || cropModeActive ? (isDragging ? 'cursor-grabbing' : 'cursor-grab') : 'default')}`}
-                style={{ transform: viewMode === 'image-edit' ? `rotate(${editRotation}deg) scaleX(${editFlipX})` : undefined, touchAction: 'none', transition: isDragging || cropModeActive ? 'none' : 'transform 0.3s ease' }}
+                style={{ 
+                   transform: viewMode === 'image-edit' ? `rotate(${editRotation}deg) scaleX(${editFlipX})` : undefined, 
+                   touchAction: 'none', 
+                   transition: isDragging || cropModeActive ? 'none' : 'transform 0.3s ease',
+                   userSelect: 'none',
+                   WebkitUserSelect: 'none'
+                }}
               />
               {cropModeActive && (
                   <div className="absolute inset-0 pointer-events-none border-2 border-white/50 shadow-[0_0_0_9999px_rgba(0,0,0,0.5)] z-20">
