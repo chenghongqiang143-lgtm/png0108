@@ -202,6 +202,23 @@ const ALL_THEME_COLORS: ThemeColor[] = [
     'cyan', 'violet', 'fuchsia', 'lime', 'amber', 'teal', 'sky'
 ];
 
+// Map theme colors to Hex values for proper rendering
+const THEME_COLORS_MAP: Record<ThemeColor, string> = {
+    'zinc': '#52525b',
+    'blue': '#2563eb',
+    'indigo': '#4f46e5',
+    'rose': '#e11d48',
+    'orange': '#ea580c',
+    'emerald': '#059669',
+    'cyan': '#0891b2',
+    'violet': '#7c3aed',
+    'fuchsia': '#c026d3',
+    'lime': '#65a30d',
+    'amber': '#d97706',
+    'teal': '#0d9488',
+    'sky': '#0284c7'
+};
+
 const App: React.FC = () => {
   // --- States ---
   const [isLoading, setIsLoading] = useState(true);
@@ -378,8 +395,8 @@ const App: React.FC = () => {
   // --- ROBUST HISTORY API HANDLER for Mobile Back Gesture ---
   
   // Helper to open a modal and push history state
-  const openModal = (action: () => void) => {
-      window.history.pushState({ modalOpen: true }, '', window.location.href);
+  const openModal = (modalKey: string, action: () => void) => {
+      window.history.pushState({ modal: modalKey }, '', window.location.href);
       action();
   };
 
@@ -388,38 +405,63 @@ const App: React.FC = () => {
       window.history.back();
   };
 
+  // Robust history handler to manage multiple layers of state
   useEffect(() => {
     const handlePopState = (e: PopStateEvent) => {
-      let handled = false;
+      const state = e.state;
+      const modalKey = state?.modal;
 
-      if (selectedPhoto) {
+      // Close items if their expected history state is missing (meaning we went back)
+      
+      // 1. Photo Modal
+      if (selectedPhoto && modalKey !== 'photo') {
         setSelectedPhoto(null);
-        handled = true;
-      } else if (isBatchMoveOpen) {
+        return;
+      }
+      
+      // 2. Batch Operations
+      if (isBatchMoveOpen && modalKey !== 'batch-move') {
         setIsBatchMoveOpen(false);
-        handled = true;
-      } else if (isBatchTagOpen) {
+        return;
+      }
+      if (isBatchTagOpen && modalKey !== 'batch-tag') {
         setIsBatchTagOpen(false);
-        handled = true;
-      } else if (isUploadMenuOpen) {
+        return;
+      }
+
+      // 3. Menus & Settings
+      if (isUploadMenuOpen && modalKey !== 'upload') {
         setIsUploadMenuOpen(false);
-        handled = true;
-      } else if (isSettingsOpen) {
+        return;
+      }
+      if (isSettingsOpen && modalKey !== 'settings') {
         setIsSettingsOpen(false);
-        handled = true;
-      } else if (isSidebarOpen) {
+        return;
+      }
+      
+      // 4. Sidebar
+      if (isSidebarOpen && modalKey !== 'sidebar') {
         setIsSidebarOpen(false);
-        handled = true;
-      } else if (isSelectionMode) {
+        return;
+      }
+      
+      // 5. Selection Mode
+      if (isSelectionMode && modalKey !== 'selection') {
         setIsSelectionMode(false);
         setSelectedIds(new Set());
-        handled = true;
+        return;
+      }
+
+      // 6. Search Focus
+      if (isSearchFocused && modalKey !== 'search') {
+          setIsSearchFocused(false);
+          return;
       }
     };
 
     window.addEventListener('popstate', handlePopState);
     return () => window.removeEventListener('popstate', handlePopState);
-  }, [selectedPhoto, isSettingsOpen, isSidebarOpen, isSelectionMode, isUploadMenuOpen, isBatchMoveOpen, isBatchTagOpen]);
+  }, [selectedPhoto, isSettingsOpen, isSidebarOpen, isSelectionMode, isUploadMenuOpen, isBatchMoveOpen, isBatchTagOpen, isSearchFocused]);
 
 
   useEffect(() => {
@@ -511,7 +553,8 @@ const App: React.FC = () => {
       const newHistory = [term, ...prev.filter(t => t !== term)].slice(0, 5);
       return newHistory;
     });
-    setIsSearchFocused(false);
+    // Do not clear focus immediately, so users can still see they are searching
+    // But hide the recent search dropdown via condition
   };
 
   const handleCollectColor = (hex: string) => {
@@ -537,7 +580,7 @@ const App: React.FC = () => {
   };
 
   const handleUploadClick = () => {
-    openModal(() => setIsUploadMenuOpen(true));
+    openModal('upload', () => setIsUploadMenuOpen(true));
   };
 
   const handleSelectFiles = () => {
@@ -671,7 +714,7 @@ const App: React.FC = () => {
   // -- Batch Move Logic --
   const handleBatchMove = () => {
     if (selectedIds.size === 0) return;
-    openModal(() => setIsBatchMoveOpen(true));
+    openModal('batch-move', () => setIsBatchMoveOpen(true));
   };
 
   const confirmBatchMove = (targetCategoryId: string) => {
@@ -679,7 +722,7 @@ const App: React.FC = () => {
     closeModal();
     setSelectedIds(new Set());
     setIsSelectionMode(false);
-    window.history.back();
+    // Don't go back here, modal closing handles history
   };
 
   // -- Batch Tag Logic --
@@ -687,7 +730,7 @@ const App: React.FC = () => {
     if (selectedIds.size === 0) return;
     setBatchSelectedTags(new Set());
     setBatchTagInput('');
-    openModal(() => setIsBatchTagOpen(true));
+    openModal('batch-tag', () => setIsBatchTagOpen(true));
   };
 
   const confirmBatchTag = () => {
@@ -707,7 +750,6 @@ const App: React.FC = () => {
     closeModal();
     setSelectedIds(new Set());
     setIsSelectionMode(false);
-    window.history.back();
   };
 
   const toggleBatchTagSelection = (tag: string) => {
@@ -808,7 +850,7 @@ const App: React.FC = () => {
     longPressTimer.current = setTimeout(() => {
       isLongPress.current = true;
       if (!isSelectionMode) {
-          openModal(() => {
+          openModal('selection', () => {
               setIsSelectionMode(true);
               setSelectedIds(new Set([photo.id]));
           });
@@ -837,7 +879,7 @@ const App: React.FC = () => {
       setSelectedIds(newSet);
     } else {
       setInitialEditMode(false);
-      openModal(() => setSelectedPhoto(photo));
+      openModal('photo', () => setSelectedPhoto(photo));
     }
   };
 
@@ -893,7 +935,7 @@ const App: React.FC = () => {
         onRenameTag={handleRenameTag}
         onDeleteTag={handleDeleteTag}
         onCategorizeTag={handleCategorizeTag}
-        onOpenSettings={() => openModal(() => setIsSettingsOpen(true))}
+        onOpenSettings={() => openModal('settings', () => setIsSettingsOpen(true))}
         totalPhotos={photos.length}
         isOpen={isSidebarOpen}
         onClose={closeModal}
@@ -905,28 +947,39 @@ const App: React.FC = () => {
         <header className="bg-white/80 backdrop-blur-md border-b border-slate-200 sticky top-0 z-30 pt-safe">
           <div className="flex items-center justify-between px-4 py-3 md:px-6 md:py-4">
             <div className="flex items-center gap-3 md:hidden">
-              <button onClick={() => openModal(() => setIsSidebarOpen(true))} className="p-1 -ml-1 text-slate-600">
+              <button onClick={() => openModal('sidebar', () => setIsSidebarOpen(true))} className="p-1 -ml-1 text-slate-600">
                 <Menu size={24} />
               </button>
             </div>
 
             <div className="flex-1 px-4 md:px-0 flex justify-center md:justify-start">
-               {isSearchFocused ? (
+               {isSearchFocused || searchQuery ? (
                  <div className="w-full max-w-md relative group">
-                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 group-focus-within:text-slate-900 transition-colors" size={18} />
+                    <button 
+                        onClick={() => handleSearchSubmit(searchQuery)}
+                        className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 group-focus-within:text-slate-900 transition-colors cursor-pointer z-10"
+                    >
+                        <Search size={18} />
+                    </button>
                     <input 
                       type="text" 
                       value={searchQuery}
                       onChange={(e) => setSearchQuery(e.target.value)}
                       onKeyDown={(e) => e.key === 'Enter' && handleSearchSubmit(searchQuery)}
+                      onFocus={() => setIsSearchFocused(true)}
                       placeholder="搜索照片、标签、描述..."
                       className="w-full bg-slate-100 border-none rounded-full pl-10 pr-10 py-2.5 text-sm focus:ring-2 focus:ring-slate-900 focus:bg-white transition-all outline-none"
-                      autoFocus
+                      autoFocus={isSearchFocused}
                     />
                      {searchQuery && (
                       <button 
-                        onClick={() => {setSearchQuery(''); setIsSearchFocused(false);}} 
-                        className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+                        onClick={() => {
+                            setSearchQuery(''); 
+                            // Only close search focus if clearing via button? Or keep it?
+                            // Keep it to allow re-typing, user can use back button or click away to close
+                            setIsSearchFocused(true);
+                        }} 
+                        className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 p-1"
                       >
                         <X size={16} />
                       </button>
@@ -938,7 +991,7 @@ const App: React.FC = () => {
                       {getPageTitle()}
                     </h2>
                     {!isToolView && (
-                      <button onClick={() => setIsSearchFocused(true)} className="md:hidden ml-auto p-2 text-slate-500">
+                      <button onClick={() => { openModal('search', () => setIsSearchFocused(true)); }} className="md:hidden ml-auto p-2 text-slate-500">
                         <Search size={20} />
                       </button>
                     )}
@@ -954,7 +1007,7 @@ const App: React.FC = () => {
                         if (isSelectionMode) {
                             closeModal();
                         } else {
-                            openModal(() => setIsSelectionMode(true));
+                            openModal('selection', () => setIsSelectionMode(true));
                         }
                      }}
                      className={`p-2 rounded-full transition-all ${isSelectionMode ? 'bg-black text-white' : 'text-slate-500 hover:bg-slate-100'}`}
@@ -964,7 +1017,7 @@ const App: React.FC = () => {
                    </button>
                    
                    <div className="hidden md:block relative">
-                       <button onClick={() => setIsSearchFocused(true)} className="p-2 text-slate-500 hover:bg-slate-100 rounded-full transition-colors">
+                       <button onClick={() => { openModal('search', () => setIsSearchFocused(true)); }} className="p-2 text-slate-500 hover:bg-slate-100 rounded-full transition-colors">
                          <Search size={20} />
                        </button>
                    </div>
@@ -1005,7 +1058,7 @@ const App: React.FC = () => {
             </div>
           </div>
           
-          {isSearchFocused && recentSearches.length > 0 && !searchQuery && (
+          {isSearchFocused && !searchQuery && recentSearches.length > 0 && (
              <div className="absolute top-full left-0 right-0 bg-white border-b border-slate-200 p-4 shadow-lg animate-fade-in z-20">
                <div className="flex items-center gap-2 mb-2 text-xs font-bold text-slate-400 uppercase tracking-widest">
                  <Clock size={12} /> 最近搜索
@@ -1265,7 +1318,7 @@ const App: React.FC = () => {
                          key={color}
                          onClick={() => setThemeColor(color as ThemeColor)}
                          className={`w-8 h-8 rounded-full border-2 transition-transform hover:scale-110 ${themeColor === color ? 'border-slate-900 scale-110' : 'border-transparent'}`}
-                         style={{ backgroundColor: color === 'zinc' ? '#334155' : `var(--color-${color}-500, ${color})` }}
+                         style={{ backgroundColor: color === 'zinc' ? '#334155' : THEME_COLORS_MAP[color] }}
                        />
                     ))}
                  </div>

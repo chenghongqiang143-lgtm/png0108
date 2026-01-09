@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useRef } from 'react';
+import React, { useState, useMemo, useRef, useEffect } from 'react';
 import { Check, Plus, Trash2, Palette, Edit3, X, Edit2 } from 'lucide-react';
 import { ColorGroup, ColorItem } from '../types';
 
@@ -98,6 +98,27 @@ export const ColorTool: React.FC<ColorToolProps> = ({ groups, onUpdateGroups }) 
   const rgb = useMemo(() => hexToRgb(selectedColor), [selectedColor]);
   const hsv = useMemo(() => rgbToHsv(rgb.r, rgb.g, rgb.b), [rgb]);
 
+  // History Handler for internal states
+  useEffect(() => {
+    const handlePopState = (e: PopStateEvent) => {
+      const modalKey = e.state?.modal;
+      if (isAddingGroup && modalKey !== 'color-add-group') {
+        setIsAddingGroup(false);
+      }
+    };
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, [isAddingGroup]);
+
+  const openAddGroup = () => {
+    window.history.pushState({ modal: 'color-add-group' }, '', window.location.href);
+    setIsAddingGroup(true);
+  };
+  
+  const closeAddGroup = () => {
+    window.history.back();
+  };
+
   const handleCreateGroup = () => {
     if (!newGroupName.trim()) return;
     const newGroup: ColorGroup = {
@@ -108,7 +129,7 @@ export const ColorTool: React.FC<ColorToolProps> = ({ groups, onUpdateGroups }) 
     };
     onUpdateGroups([...groups, newGroup]);
     setNewGroupName('');
-    setIsAddingGroup(false);
+    closeAddGroup();
   };
 
   const handleDeleteGroup = (groupId: string) => {
@@ -269,11 +290,11 @@ export const ColorTool: React.FC<ColorToolProps> = ({ groups, onUpdateGroups }) 
 
            {/* Values */}
            <div className="grid grid-cols-2 gap-4 w-full max-w-xs mb-8">
-              <div className="bg-white/60 backdrop-blur-md p-3 shadow-sm border border-white/40 rounded-none whitespace-nowrap">
+              <div className="bg-white/60 backdrop-blur-md p-3 shadow-sm border border-white/40 rounded-none whitespace-nowrap flex flex-col items-center justify-center">
                 <span className="block text-[10px] text-gray-500 uppercase font-bold mb-1 tracking-wider">RGB</span>
                 <span className="font-mono text-gray-900 font-medium">{rgb.r}, {rgb.g}, {rgb.b}</span>
               </div>
-              <div className="bg-white/60 backdrop-blur-md p-3 shadow-sm border border-white/40 rounded-none whitespace-nowrap">
+              <div className="bg-white/60 backdrop-blur-md p-3 shadow-sm border border-white/40 rounded-none whitespace-nowrap flex flex-col items-center justify-center">
                 <span className="block text-[10px] text-gray-500 uppercase font-bold mb-1 tracking-wider">HSV</span>
                 <span className="font-mono text-gray-900 font-medium">{hsv.h}°, {hsv.s}%, {hsv.v}%</span>
               </div>
@@ -290,7 +311,7 @@ export const ColorTool: React.FC<ColorToolProps> = ({ groups, onUpdateGroups }) 
                 色彩库
             </h3>
             <button 
-                onClick={() => setIsAddingGroup(true)}
+                onClick={openAddGroup}
                 className="flex items-center gap-1 text-xs bg-slate-100 hover:bg-slate-200 text-gray-900 px-4 py-2 transition-colors font-bold uppercase tracking-wider rounded-none whitespace-nowrap"
             >
                 <Plus size={14} /> 新建色彩组
@@ -311,7 +332,7 @@ export const ColorTool: React.FC<ColorToolProps> = ({ groups, onUpdateGroups }) 
                   />
                   <div className="flex flex-1 sm:flex-initial w-full sm:w-auto">
                     <button onClick={handleCreateGroup} className="flex-1 sm:flex-initial bg-black text-white px-5 py-2 text-xs font-bold hover:bg-gray-800 uppercase rounded-none whitespace-nowrap">创建</button>
-                    <button onClick={() => setIsAddingGroup(false)} className="flex-1 sm:flex-initial bg-white border border-l-0 border-gray-300 text-gray-700 px-5 py-2 text-xs font-bold hover:bg-gray-50 uppercase rounded-none whitespace-nowrap">取消</button>
+                    <button onClick={closeAddGroup} className="flex-1 sm:flex-initial bg-white border border-l-0 border-gray-300 text-gray-700 px-5 py-2 text-xs font-bold hover:bg-gray-50 uppercase rounded-none whitespace-nowrap">取消</button>
                   </div>
                 </div>
             </div>

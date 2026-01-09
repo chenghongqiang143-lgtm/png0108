@@ -111,6 +111,11 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
   // Fullscreen State (Desktop)
   const [isFullscreen, setIsFullscreen] = useState(false);
 
+  // Animation States for Continuous Switching
+  const [activePhoto, setActivePhoto] = useState<Photo | null>(photo);
+  const [exitingPhoto, setExitingPhoto] = useState<Photo | null>(null);
+  const prevPhotoIdRef = useRef<string | undefined>(photo?.id);
+
   useEffect(() => {
     if (photo) {
       setEditedTitle(photo.title);
@@ -122,11 +127,31 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
       setIsDeleteConfirm(false); 
       setIsPickerActive(false);
       setPickedColor(null);
-      setZoomLevel(1); 
-      setPan({ x: 0, y: 0 }); 
-      setSwipeOffset(0);
+      
       setShowMobileInfo(initialEditMode); // Auto show info if starting in edit mode
       setShowMobileControls(true);
+
+      // Animation Logic:
+      // If photo changes, set old active as exiting, new photo as active
+      if (photo.id !== prevPhotoIdRef.current) {
+          setExitingPhoto(activePhoto);
+          setActivePhoto(photo);
+          prevPhotoIdRef.current = photo.id;
+          
+          // Reset Zoom & Pan for new photo
+          setZoomLevel(1); 
+          setPan({ x: 0, y: 0 }); 
+          setSwipeOffset(0);
+
+          // Clear exiting photo after animation completes
+          const timer = setTimeout(() => {
+              setExitingPhoto(null);
+          }, 300); // Match duration-300
+          return () => clearTimeout(timer);
+      } else {
+          // Initial or same
+          setActivePhoto(photo);
+      }
     }
   }, [photo, isOpen, initialEditMode]);
 
@@ -160,7 +185,7 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
     return { rgb, hsv };
   }, [pickedColor]);
 
-  if (!isOpen || !photo) return null;
+  if (!isOpen || !photo || !activePhoto) return null;
 
   const handleSave = () => {
     let finalTags = [...currentTags];
@@ -177,8 +202,8 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
       tags: finalTags
     });
     setIsEditing(false);
-    if (window.innerWidth < 1024) { // Updated breakpoint
-       setShowMobileInfo(false); // Close sheet on save for mobile/tablet
+    if (window.innerWidth < 1024) { 
+       setShowMobileInfo(false); 
     }
   };
   
@@ -188,7 +213,6 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
          onClose(); 
      } else {
          setIsDeleteConfirm(true);
-         // Auto-hide confirm after 3s
          setTimeout(() => setIsDeleteConfirm(false), 3000);
      }
   };
@@ -226,10 +250,9 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
   };
 
   const handleMobileImageTap = () => {
-      // Toggle controls on mobile/tablet
-      if (window.innerWidth < 1024) { // Updated breakpoint
+      if (window.innerWidth < 1024) {
           setShowMobileControls(!showMobileControls);
-          if (showMobileInfo) setShowMobileInfo(false); // tapping image closes info sheet
+          if (showMobileInfo) setShowMobileInfo(false);
       }
   };
 
@@ -237,7 +260,7 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
   const handleZoomIn = () => setZoomLevel(prev => Math.min(prev + 0.5, 4));
   const handleZoomOut = () => {
     setZoomLevel(prev => {
-      const newZoom = Math.max(prev - 0.5, 0.5); // Allow going below 1 for exit gesture
+      const newZoom = Math.max(prev - 0.5, 0.5); 
       if (newZoom <= 1) setPan({ x: 0, y: 0 });
       return newZoom;
     });
@@ -248,15 +271,11 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
     if (isPickerActive) return;
     
     if (e.touches.length === 2) {
-      // Pinch Start
       initialPinchDist.current = getDistance(e.touches);
       initialZoom.current = zoomLevel;
     } else if (e.touches.length === 1) {
-      // Record for Swipe or Drag
       touchStartX.current = e.touches[0].clientX;
       touchStartY.current = e.touches[0].clientY;
-
-      // Drag Start
       setIsDragging(true);
       dragStart.current = { x: e.touches[0].clientX - pan.x, y: e.touches[0].clientY - pan.y };
     }
@@ -266,24 +285,20 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
     if (isPickerActive) return;
 
     if (e.touches.length === 2 && initialPinchDist.current) {
-       // Pinching
        const dist = getDistance(e.touches);
        const scale = dist / initialPinchDist.current;
        setZoomLevel(Math.min(Math.max(initialZoom.current * scale, 0.5), 5));
        e.preventDefault();
     } else if (e.touches.length === 1 && isDragging) {
-       // Panning or Swiping
        if (zoomLevel > 1) {
            setPan({
              x: e.touches[0].clientX - dragStart.current.x,
              y: e.touches[0].clientY - dragStart.current.y
            });
        } else {
-           // Zoom Level 1: Handle Swipe Logic
            const deltaX = e.touches[0].clientX - touchStartX.current;
            const deltaY = e.touches[0].clientY - touchStartY.current;
            
-           // If horizontal movement dominates, track swipe offset for nav
            if (Math.abs(deltaX) > Math.abs(deltaY) && Math.abs(deltaX) > 10) {
                setSwipeOffset(deltaX);
                e.preventDefault();
@@ -296,9 +311,7 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
     initialPinchDist.current = null;
     setIsDragging(false);
 
-    // Swipe Gesture Check (Only when not zoomed in)
     if (zoomLevel === 1) {
-        // Navigation Swipe
         if (Math.abs(swipeOffset) > 80) {
              if (swipeOffset > 0 && hasPrev && onPrev) {
                  setDirection('left');
@@ -307,13 +320,12 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
                  setDirection('right');
                  onNext();
              } else {
-                 setSwipeOffset(0); // Snap back if no prev/next
+                 setSwipeOffset(0); 
              }
         } else {
-             setSwipeOffset(0); // Snap back if threshold not met
+             setSwipeOffset(0); 
         }
         
-        // Vertical Swipe (Close / Controls) - Only if not swiping horizontally
         if (Math.abs(swipeOffset) < 10 && e.changedTouches.length === 1) {
              const deltaY = e.changedTouches[0].clientY - touchStartY.current;
              const deltaX = e.changedTouches[0].clientX - touchStartX.current;
@@ -327,17 +339,14 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
         }
     }
 
-    // Close on Zoom Out Gesture
     if (zoomLevel < 0.7) {
       onClose();
     } else if (zoomLevel < 1) {
-      // Snap back to 100%
       setZoomLevel(1);
       setPan({ x: 0, y: 0 });
     }
   };
 
-  // Mouse Handlers (Desktop)
   const handleMouseDown = (e: React.MouseEvent) => {
     if (isPickerActive || zoomLevel <= 1) return;
     e.preventDefault();
@@ -357,10 +366,8 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
     setIsDragging(false);
   };
 
-  // Color Picker Logic
   const handleImageClick = (e: React.MouseEvent<HTMLImageElement>) => {
     if (isPickerActive && imgRef.current) {
-        // Picker logic
         const img = imgRef.current;
         const canvas = document.createElement('canvas');
         const ctx = canvas.getContext('2d');
@@ -380,7 +387,6 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
             setIsPickerActive(false);
         }
     } else {
-        // Normal Click -> Toggle Mobile Controls
         handleMobileImageTap();
     }
   };
@@ -391,7 +397,19 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black lg:bg-black/90 lg:backdrop-blur-md lg:p-12 animate-in fade-in duration-200 overflow-hidden">
       
-      {/* Main Container - Switched from md: to lg: for better tablet support */}
+      <style>{`
+        @keyframes slideInRight { from { transform: translateX(100%); } to { transform: translateX(0); } }
+        @keyframes slideOutLeft { from { transform: translateX(0); } to { transform: translateX(-100%); } }
+        @keyframes slideInLeft { from { transform: translateX(-100%); } to { transform: translateX(0); } }
+        @keyframes slideOutRight { from { transform: translateX(0); } to { transform: translateX(100%); } }
+        
+        .anim-slide-in-right { animation: slideInRight 0.3s ease-out forwards; }
+        .anim-slide-out-left { animation: slideOutLeft 0.3s ease-out forwards; }
+        .anim-slide-in-left { animation: slideInLeft 0.3s ease-out forwards; }
+        .anim-slide-out-right { animation: slideOutRight 0.3s ease-out forwards; }
+      `}</style>
+
+      {/* Main Container */}
       <div className="bg-black w-full h-full lg:h-auto lg:max-h-[85vh] lg:max-w-6xl flex flex-col lg:flex-row lg:shadow-2xl relative lg:rounded-lg overflow-hidden">
         
         {/* IMAGE SECTION */}
@@ -399,16 +417,14 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
             ref={imgContainerRef}
             className={`w-full h-full lg:w-2/3 bg-black flex items-center justify-center relative group shrink-0 overflow-hidden lg:rounded-l-lg`}
         >
-          
-          {/* Mobile Top Bar (Visible up to lg breakpoint) */}
+          {/* Mobile Top Bar */}
           <div className={`absolute top-0 inset-x-0 p-4 z-30 flex justify-between items-start lg:hidden pt-safe transition-opacity duration-300 ${showMobileControls ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}>
               <button onClick={onClose} className="mt-4 p-2.5 text-white/90 bg-black/20 backdrop-blur-md rounded-full active:bg-black/40">
                   <ChevronLeft size={24} />
               </button>
-              {/* Optional: Add more top controls here if needed */}
           </div>
 
-          {/* Mobile Bottom Bar (Visible up to lg breakpoint) */}
+          {/* Mobile Bottom Bar */}
           <div className={`absolute bottom-0 inset-x-0 z-30 flex justify-around items-center lg:hidden pb-safe pt-6 bg-gradient-to-t from-black/90 via-black/50 to-transparent transition-transform duration-300 ${showMobileControls && !showMobileInfo ? 'translate-y-0' : 'translate-y-full'}`}>
               <button onClick={() => setShowMobileInfo(true)} className="p-4 text-white/90 flex flex-col items-center gap-1 active:scale-95 transition-transform">
                   <Info size={24} strokeWidth={1.5} />
@@ -432,7 +448,7 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
               </button>
           </div>
 
-          {/* Desktop Controls (Zoom & Close) - Visible only on LG+ */}
+          {/* Desktop Controls */}
           <div className="hidden lg:flex absolute top-0 inset-x-0 z-30 justify-end p-4 pt-8 gap-3 pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity">
                 <div className="flex gap-2 bg-black/50 p-1.5 rounded-full backdrop-blur-md pointer-events-auto">
                     <button onClick={handleZoomOut} className="p-2 text-white/90 hover:text-white hover:bg-white/20 rounded-full transition-colors" title="缩小">
@@ -448,11 +464,25 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
                 </div>
           </div>
 
+          {/* EXITING PHOTO (Animated out) */}
+          {exitingPhoto && (
+             <img 
+               key={exitingPhoto.id}
+               src={exitingPhoto.url} 
+               className={`
+                  absolute inset-0 w-full h-full object-contain pointer-events-none
+                  ${direction === 'right' ? 'anim-slide-out-left' : 'anim-slide-out-right'}
+               `}
+               style={{ touchAction: 'none' }}
+             />
+          )}
+
+          {/* ACTIVE PHOTO (Interactive) */}
           <img 
-            key={photo.id}
+            key={activePhoto.id}
             ref={imgRef}
-            src={photo.url} 
-            alt={photo.title} 
+            src={activePhoto.url} 
+            alt={activePhoto.title} 
             crossOrigin="anonymous" 
             onClick={handleImageClick}
             // Mouse Events
@@ -466,21 +496,18 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
             onTouchEnd={handleTouchEnd}
             
             className={`
-                object-contain 
-                ${isDragging || swipeOffset !== 0 ? '' : 'transition-transform duration-200'} 
+                absolute inset-0 w-full h-full object-contain
+                ${exitingPhoto ? (direction === 'right' ? 'anim-slide-in-right' : 'anim-slide-in-left') : ''}
+                ${isDragging || swipeOffset !== 0 ? '' : (exitingPhoto ? '' : 'transition-transform duration-200')} 
                 ${isPickerActive ? 'cursor-crosshair' : (zoomLevel > 1 ? (isDragging ? 'cursor-grabbing' : 'cursor-grab') : 'default')}
-                ${direction === 'right' ? 'animate-in slide-in-from-right duration-300' : ''}
-                ${direction === 'left' ? 'animate-in slide-in-from-left duration-300' : ''}
             `}
             style={{ 
-              transform: `translate(${pan.x + swipeOffset}px, ${pan.y}px) scale(${zoomLevel})`,
-              maxHeight: '100%',
-              maxWidth: '100%',
+              transform: exitingPhoto ? undefined : `translate(${pan.x + swipeOffset}px, ${pan.y}px) scale(${zoomLevel})`,
               touchAction: 'none'
             }}
           />
           
-          {/* Mobile Overlay: Zoom hint when zoomed in (Updated for tablet) */}
+          {/* Zoom Hint */}
           {zoomLevel > 1 && window.innerWidth < 1024 && (
              <div className="absolute top-4 left-1/2 -translate-x-1/2 bg-black/50 text-white px-3 py-1 rounded-full text-xs backdrop-blur-sm pointer-events-none">
                 {Math.round(zoomLevel * 100)}%
@@ -519,14 +546,14 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
           )}
 
           {/* Nav Arrows */}
-          <div className="absolute inset-y-0 left-0 flex items-center px-2 pointer-events-none">
+          <div className="absolute inset-y-0 left-0 flex items-center px-2 pointer-events-none z-40">
               {hasPrev ? (
                   <button onClick={(e) => { e.stopPropagation(); setDirection('left'); onPrev?.(); }} className="pointer-events-auto p-2 rounded-full bg-black/10 hover:bg-black/40 text-white/50 hover:text-white transition-all backdrop-blur-[2px]">
                       <ChevronLeft size={32} />
                   </button>
               ) : <div></div>}
           </div>
-          <div className="absolute inset-y-0 right-0 flex items-center px-2 pointer-events-none">
+          <div className="absolute inset-y-0 right-0 flex items-center px-2 pointer-events-none z-40">
                {hasNext ? (
                   <button onClick={(e) => { e.stopPropagation(); setDirection('right'); onNext?.(); }} className="pointer-events-auto p-2 rounded-full bg-black/10 hover:bg-black/40 text-white/50 hover:text-white transition-all backdrop-blur-[2px]">
                       <ChevronRight size={32} />
@@ -535,7 +562,7 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
           </div>
         </div>
 
-        {/* DETAILS SECTION - Responsive: Sidebar on Desktop, Bottom Sheet on Mobile/Tablet */}
+        {/* DETAILS SECTION */}
         <div 
           className={`
              flex flex-col bg-white
@@ -569,7 +596,7 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
                 <span className="lg:hidden text-xs font-bold text-gray-400 uppercase tracking-widest">照片信息</span>
             </div>
             
-            {/* Close Button - Desktop: closes modal. Mobile: closes sheet */}
+            {/* Close Button */}
             <button 
                 onClick={() => {
                     if (window.innerWidth < 1024) setShowMobileInfo(false);
@@ -688,7 +715,7 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
             </div>
           </div>
           
-          {/* Footer Actions (Only visible in Edit Mode or Desktop Footer) */}
+          {/* Footer Actions */}
           <div className={`p-6 border-t border-gray-100 bg-gray-50 shrink-0 gap-3 ${isEditing ? 'flex' : 'hidden lg:flex'}`}>
             {isEditing ? (
               <>

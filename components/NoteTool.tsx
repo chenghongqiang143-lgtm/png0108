@@ -47,6 +47,27 @@ export const NoteTool: React.FC = () => {
     localStorage.setItem('inspiration_notes', JSON.stringify(notes));
   }, [notes]);
 
+  // History Handler for Editor View
+  useEffect(() => {
+    const handlePopState = (e: PopStateEvent) => {
+      const modalKey = e.state?.modal;
+      if (selectedNoteId && modalKey !== 'note-editor') {
+        setSelectedNoteId(null);
+      }
+    };
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, [selectedNoteId]);
+
+  const openNoteEditor = (noteId: string) => {
+     window.history.pushState({ modal: 'note-editor' }, '', window.location.href);
+     setSelectedNoteId(noteId);
+  };
+  
+  const closeNoteEditor = () => {
+     window.history.back();
+  };
+
   // Sync content when selecting note
   useEffect(() => {
     if (selectedNoteId) {
@@ -87,14 +108,15 @@ export const NoteTool: React.FC = () => {
       updatedAt: Date.now(),
     };
     setNotes([newNote, ...notes]);
-    setSelectedNoteId(newNote.id);
+    // Use history push for new note creation as well
+    openNoteEditor(newNote.id);
   };
 
   const handleDeleteNote = (e: React.MouseEvent, id: string) => {
     e.stopPropagation();
     if (confirm('确定删除此便签吗？')) {
       setNotes(prev => prev.filter(n => n.id !== id));
-      if (selectedNoteId === id) setSelectedNoteId(null);
+      if (selectedNoteId === id) closeNoteEditor();
     }
   };
 
@@ -322,7 +344,7 @@ export const NoteTool: React.FC = () => {
         {/* Header */}
         <div className="flex items-center justify-between p-4 border-b border-slate-200 bg-white sticky top-0 z-10">
           <div className="flex items-center gap-4 flex-1 overflow-hidden">
-            <button onClick={() => setSelectedNoteId(null)} className="text-slate-500 hover:text-slate-900 shrink-0">
+            <button onClick={closeNoteEditor} className="text-slate-500 hover:text-slate-900 shrink-0">
               <ArrowLeft size={20} />
             </button>
             <input 
@@ -420,8 +442,8 @@ export const NoteTool: React.FC = () => {
        </div>
 
        {/* Main Content */}
-       <div className="flex-1 overflow-y-auto p-4">
-         <div className="flex justify-between items-end mb-4">
+       <div className="flex-1 overflow-y-auto p-2 md:p-4">
+         <div className="flex justify-between items-end mb-4 px-2">
             <div>
                <h2 className="text-xl font-black text-slate-900 tracking-tight uppercase">灵感便签</h2>
                <p className="text-[10px] text-slate-400 mt-0.5 font-mono">{filteredNotes.length} 条笔记</p>
@@ -435,17 +457,17 @@ export const NoteTool: React.FC = () => {
          </div>
 
          {filteredNotes.length === 0 ? (
-           <div className="flex flex-col items-center justify-center h-48 text-slate-400 border-2 border-dashed border-slate-200 bg-white/50">
+           <div className="flex flex-col items-center justify-center h-48 text-slate-400 border-2 border-dashed border-slate-200 bg-white/50 mx-2">
              <StickyNote size={32} className="mb-2 opacity-20" />
              <p className="font-bold text-xs">此分类暂无便签</p>
            </div>
          ) : (
-           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+           <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3">
              {filteredNotes.map(note => (
                <div 
                  key={note.id}
-                 onClick={() => setSelectedNoteId(note.id)}
-                 className="bg-white p-4 shadow-sm hover:shadow-xl transition-all cursor-pointer border border-slate-100 group flex flex-col h-40 rounded-none relative hover:-translate-y-0.5"
+                 onClick={() => openNoteEditor(note.id)}
+                 className="bg-white p-3 md:p-4 shadow-sm hover:shadow-xl transition-all cursor-pointer border border-slate-100 group flex flex-col h-40 rounded-none relative hover:-translate-y-0.5"
                >
                  <div className="flex justify-between items-start mb-2">
                    <h3 className="font-bold text-sm text-slate-900 truncate pr-4">{note.title}</h3>
@@ -464,7 +486,7 @@ export const NoteTool: React.FC = () => {
                  </div>
                  <div className="mt-2 pt-2 border-t border-slate-50 flex justify-between items-center text-[10px] text-slate-400 font-mono uppercase">
                    <span>{new Date(note.updatedAt).toLocaleDateString()}</span>
-                   <span className="bg-slate-100 px-1.5 py-0.5 rounded-sm">{categories.find(c => c.id === note.categoryId)?.name || '未知'}</span>
+                   <span className="bg-slate-100 px-1.5 py-0.5 rounded-sm truncate max-w-[60px]">{categories.find(c => c.id === note.categoryId)?.name || '未知'}</span>
                  </div>
                </div>
              ))}
