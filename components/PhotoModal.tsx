@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { Photo, Category } from '../types';
-import { X, Calendar, Tag, Edit2, Check, Folder, Clock, Trash2, ChevronLeft, ChevronRight, Heart, Pipette, Copy, Bookmark, ZoomIn, ZoomOut, Maximize, Minimize } from 'lucide-react';
+import { X, Calendar, Tag, Edit2, Folder, Clock, Trash2, ChevronLeft, ChevronRight, Heart, Pipette, Copy, Bookmark, ZoomIn, ZoomOut, Maximize, Minimize, Info, Share2, MoreVertical } from 'lucide-react';
 
 interface PhotoModalProps {
   photo: Photo | null;
@@ -102,7 +102,11 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
   const touchStartX = useRef(0);
   const touchStartY = useRef(0);
 
-  // Fullscreen State
+  // Mobile View State
+  const [showMobileInfo, setShowMobileInfo] = useState(false);
+  const [showMobileControls, setShowMobileControls] = useState(true);
+
+  // Fullscreen State (Desktop)
   const [isFullscreen, setIsFullscreen] = useState(false);
 
   useEffect(() => {
@@ -116,8 +120,10 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
       setIsDeleteConfirm(false); 
       setIsPickerActive(false);
       setPickedColor(null);
-      setZoomLevel(1); // Reset zoom
-      setPan({ x: 0, y: 0 }); // Reset pan
+      setZoomLevel(1); 
+      setPan({ x: 0, y: 0 }); 
+      setShowMobileInfo(initialEditMode); // Auto show info if starting in edit mode
+      setShowMobileControls(true);
     }
   }, [photo, isOpen, initialEditMode]);
 
@@ -162,6 +168,9 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
       tags: finalTags
     });
     setIsEditing(false);
+    if (window.innerWidth < 768) {
+       setShowMobileInfo(false); // Close sheet on save for mobile
+    }
   };
   
   const handleDeleteClick = () => {
@@ -170,6 +179,8 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
          onClose(); 
      } else {
          setIsDeleteConfirm(true);
+         // Auto-hide confirm after 3s
+         setTimeout(() => setIsDeleteConfirm(false), 3000);
      }
   };
 
@@ -203,6 +214,14 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
     } else {
         document.exitFullscreen();
     }
+  };
+
+  const handleMobileImageTap = () => {
+      // Toggle controls on mobile
+      if (window.innerWidth < 768) {
+          setShowMobileControls(!showMobileControls);
+          if (showMobileInfo) setShowMobileInfo(false); // tapping image closes info sheet
+      }
   };
 
   // Zoom Logic
@@ -261,10 +280,21 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
         const deltaX = e.changedTouches[0].clientX - touchStartX.current;
         const deltaY = e.changedTouches[0].clientY - touchStartY.current;
         
-        // Horizontal swipe detected (threshold of 50px, and mostly horizontal)
+        // Horizontal swipe (Nav)
         if (Math.abs(deltaX) > 50 && Math.abs(deltaY) < 30) {
-            if (deltaX > 0 && hasPrev && onPrev) onPrev(); // Swipe Right -> Prev
-            if (deltaX < 0 && hasNext && onNext) onNext(); // Swipe Left -> Next
+            if (deltaX > 0 && hasPrev && onPrev) onPrev(); 
+            if (deltaX < 0 && hasNext && onNext) onNext(); 
+        }
+        
+        // Vertical swipe (Close / Controls)
+        if (Math.abs(deltaY) > 60 && Math.abs(deltaX) < 30) {
+            if (deltaY > 0) {
+                // Swipe Down: Close modal (like standard gallery apps)
+                onClose();
+            } else {
+                // Swipe Up: Show Info
+                setShowMobileInfo(true);
+            }
         }
     }
 
@@ -300,36 +330,29 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
 
   // Color Picker Logic
   const handleImageClick = (e: React.MouseEvent<HTMLImageElement>) => {
-    if (!isPickerActive || !imgRef.current) return;
-
-    const img = imgRef.current;
-    const canvas = document.createElement('canvas');
-    const ctx = canvas.getContext('2d');
-    
-    if (!ctx) return;
-
-    // We must set canvas size to natural image size to get accurate pixel
-    canvas.width = img.naturalWidth;
-    canvas.height = img.naturalHeight;
-
-    // Draw the image onto the canvas
-    try {
-        ctx.drawImage(img, 0, 0, img.naturalWidth, img.naturalHeight);
-        
-        // Calculate click position relative to the displayed image size vs natural size
-        // Use getBoundingClientRect to account for zoom transform
-        const rect = img.getBoundingClientRect();
-        const x = (e.clientX - rect.left) * (img.naturalWidth / rect.width);
-        const y = (e.clientY - rect.top) * (img.naturalHeight / rect.height);
-
-        const pixel = ctx.getImageData(x, y, 1, 1).data;
-        const hex = "#" + ((1 << 24) + (pixel[0] << 16) + (pixel[1] << 8) + pixel[2]).toString(16).slice(1).toUpperCase();
-        
-        setPickedColor(hex);
-    } catch (err) {
-        console.error("Color pick failed (likely CORS):", err);
-        alert("无法从该图片提取颜色（跨域限制）。请尝试上传本地图片。");
-        setIsPickerActive(false);
+    if (isPickerActive && imgRef.current) {
+        // Picker logic
+        const img = imgRef.current;
+        const canvas = document.createElement('canvas');
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return;
+        canvas.width = img.naturalWidth;
+        canvas.height = img.naturalHeight;
+        try {
+            ctx.drawImage(img, 0, 0, img.naturalWidth, img.naturalHeight);
+            const rect = img.getBoundingClientRect();
+            const x = (e.clientX - rect.left) * (img.naturalWidth / rect.width);
+            const y = (e.clientY - rect.top) * (img.naturalHeight / rect.height);
+            const pixel = ctx.getImageData(x, y, 1, 1).data;
+            const hex = "#" + ((1 << 24) + (pixel[0] << 16) + (pixel[1] << 8) + pixel[2]).toString(16).slice(1).toUpperCase();
+            setPickedColor(hex);
+        } catch (err) {
+            console.error("Color pick failed", err);
+            setIsPickerActive(false);
+        }
+    } else {
+        // Normal Click -> Toggle Mobile Controls
+        handleMobileImageTap();
     }
   };
 
@@ -337,21 +360,47 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
   const tagSuggestions = availableTags.filter(t => !currentTags.includes(t) && t.toLowerCase().includes(newTag.toLowerCase())).slice(0, 10);
 
   return (
-    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/95 md:bg-black/90 backdrop-blur-md md:p-12 animate-in fade-in duration-200 overflow-y-auto md:overflow-hidden">
+    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black md:bg-black/90 md:backdrop-blur-md md:p-12 animate-in fade-in duration-200 overflow-hidden">
       
-      {/* Main Container: Changed layout strategy for mobile landscape to allow vertical scroll */}
-      <div className="bg-transparent md:bg-white w-full min-h-full md:min-h-0 md:h-auto md:max-h-[85vh] md:max-w-6xl flex flex-col md:flex-row shadow-2xl relative rounded-none">
+      {/* Main Container */}
+      <div className="bg-black w-full h-full md:h-auto md:max-h-[85vh] md:max-w-6xl flex flex-col md:flex-row md:shadow-2xl relative md:rounded-lg overflow-hidden">
         
-        {/* IMAGE SECTION (Full screen on mobile view, Partial on mobile edit, Left side on Desktop) */}
-        {/* Mobile Landscape optimization: In landscape on small devices, remove fixed height so it flows */}
+        {/* IMAGE SECTION */}
         <div 
             ref={imgContainerRef}
-            className={`${isEditing ? 'h-72 md:h-auto md:h-full' : 'h-[50vh] landscape:h-auto landscape:min-h-[60vh] md:h-auto md:h-full'} w-full md:w-2/3 bg-black/40 md:bg-zinc-950 flex items-center justify-center relative group shrink-0 transition-all duration-300 overflow-hidden md:rounded-l-lg`}
+            className={`w-full h-full md:w-2/3 bg-black flex items-center justify-center relative group shrink-0 overflow-hidden md:rounded-l-lg`}
         >
           
-          {/* Top Controls (Zoom & Close) - Moved down for Safe Area */}
-          {!isEditing && (
-            <div className="absolute top-0 inset-x-0 z-30 flex justify-end p-4 pt-safe mt-4 md:mt-12 gap-3 pointer-events-none">
+          {/* Mobile Top Bar */}
+          <div className={`absolute top-0 inset-x-0 p-4 z-30 flex justify-between items-start md:hidden pt-safe transition-opacity duration-300 ${showMobileControls ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}>
+              <button onClick={onClose} className="p-2.5 text-white/90 bg-black/20 backdrop-blur-md rounded-full active:bg-black/40">
+                  <ChevronLeft size={24} />
+              </button>
+              {/* Optional: Add more top controls here if needed */}
+          </div>
+
+          {/* Mobile Bottom Bar */}
+          <div className={`absolute bottom-0 inset-x-0 z-30 flex justify-around items-center md:hidden pb-safe pt-6 bg-gradient-to-t from-black/90 via-black/50 to-transparent transition-transform duration-300 ${showMobileControls && !showMobileInfo ? 'translate-y-0' : 'translate-y-full'}`}>
+              <button onClick={() => setShowMobileInfo(true)} className="p-4 text-white/90 flex flex-col items-center gap-1 active:scale-95 transition-transform">
+                  <Info size={24} strokeWidth={1.5} />
+                  <span className="text-[10px] font-medium opacity-80">信息</span>
+              </button>
+              <button onClick={handleToggleFavorite} className={`p-4 flex flex-col items-center gap-1 active:scale-95 transition-transform ${photo.isFavorite ? 'text-red-500' : 'text-white/90'}`}>
+                  <Heart size={24} className={photo.isFavorite ? 'fill-current' : ''} strokeWidth={1.5} />
+                  <span className="text-[10px] font-medium opacity-80">收藏</span>
+              </button>
+              <button onClick={() => { setIsEditing(true); setShowMobileInfo(true); }} className="p-4 text-white/90 flex flex-col items-center gap-1 active:scale-95 transition-transform">
+                  <Edit2 size={24} strokeWidth={1.5} />
+                  <span className="text-[10px] font-medium opacity-80">编辑</span>
+              </button>
+              <button onClick={handleDeleteClick} className={`p-4 flex flex-col items-center gap-1 active:scale-95 transition-transform ${isDeleteConfirm ? 'text-red-500' : 'text-white/90'}`}>
+                  <Trash2 size={24} strokeWidth={1.5} />
+                  <span className="text-[10px] font-medium opacity-80">{isDeleteConfirm ? '确认' : '删除'}</span>
+              </button>
+          </div>
+
+          {/* Desktop Controls (Zoom & Close) */}
+          <div className="hidden md:flex absolute top-0 inset-x-0 z-30 justify-end p-4 pt-8 gap-3 pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity">
                 <div className="flex gap-2 bg-black/50 p-1.5 rounded-full backdrop-blur-md pointer-events-auto">
                     <button onClick={handleZoomOut} className="p-2 text-white/90 hover:text-white hover:bg-white/20 rounded-full transition-colors" title="缩小">
                         <ZoomOut size={20} />
@@ -364,8 +413,7 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
                         <X size={20} />
                     </button>
                 </div>
-            </div>
-          )}
+          </div>
 
           <img 
             ref={imgRef}
@@ -388,23 +436,28 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
               transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoomLevel})`,
               maxHeight: '100%',
               maxWidth: '100%',
-              touchAction: 'none' // Prevent default touch actions (scroll/zoom by browser)
+              touchAction: 'none'
             }}
           />
           
-          {/* Picker Active Indicator Overlay */}
+          {/* Mobile Overlay: Zoom hint when zoomed in */}
+          {zoomLevel > 1 && window.innerWidth < 768 && (
+             <div className="absolute top-4 left-1/2 -translate-x-1/2 bg-black/50 text-white px-3 py-1 rounded-full text-xs backdrop-blur-sm pointer-events-none">
+                {Math.round(zoomLevel * 100)}%
+             </div>
+          )}
+
+          {/* Color Picker Indicator */}
           {isPickerActive && (
-             <div className="absolute top-4 left-1/2 -translate-x-1/2 mt-16 z-20 bg-black/60 text-white px-3 py-1.5 rounded-full text-xs font-bold backdrop-blur-md pointer-events-none animate-pulse">
-                点击图片取色中...
+             <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-20 bg-black/60 text-white px-4 py-2 rounded-full text-sm font-bold backdrop-blur-md pointer-events-none animate-pulse shadow-lg">
+                点击图片取色
              </div>
           )}
 
           {/* Picked Color Result Overlay */}
           {pickedColor && colorDetails && (
-            <div className="absolute bottom-24 md:bottom-8 z-30 flex items-center gap-4 bg-white/95 backdrop-blur shadow-2xl p-3 pr-4 rounded-full animate-in zoom-in slide-in-from-bottom-4 border border-gray-100">
-                <div className="w-10 h-10 rounded-full border-2 border-white shadow-sm" style={{ backgroundColor: pickedColor }}></div>
-                
-                {/* Color Values */}
+            <div className="absolute bottom-24 md:bottom-8 z-30 flex items-center gap-4 bg-white/95 backdrop-blur shadow-2xl p-3 pr-4 rounded-full animate-in zoom-in slide-in-from-bottom-4 border border-gray-100 mx-auto left-4 right-4 md:left-auto md:right-auto md:min-w-[300px] justify-center">
+                <div className="w-10 h-10 rounded-full border-2 border-white shadow-sm shrink-0" style={{ backgroundColor: pickedColor }}></div>
                 <div className="flex flex-col gap-0.5 min-w-[80px]">
                     <div className="flex items-center gap-2">
                       <span className="text-[10px] font-bold text-gray-400 w-6">HEX</span>
@@ -414,37 +467,18 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
                        <span className="text-[10px] font-bold text-gray-400 w-6">RGB</span>
                        <span className="text-[10px] font-medium text-gray-600 font-mono">{colorDetails.rgb.r}, {colorDetails.rgb.g}, {colorDetails.rgb.b}</span>
                     </div>
-                     <div className="flex items-center gap-2">
-                       <span className="text-[10px] font-bold text-gray-400 w-6">HSV</span>
-                       <span className="text-[10px] font-medium text-gray-600 font-mono">{colorDetails.hsv.h}°, {colorDetails.hsv.s}%, {colorDetails.hsv.v}%</span>
-                    </div>
                 </div>
-
                 <div className="w-px h-8 bg-gray-200 mx-1"></div>
-                
                 <div className="flex items-center gap-1">
                   {onCollectColor && (
-                    <button 
-                      onClick={() => onCollectColor(pickedColor)}
-                      className="p-2 hover:bg-gray-100 rounded-full text-gray-400 hover:text-indigo-600 transition-colors"
-                      title="收藏到色彩库"
-                    >
-                        <Bookmark size={18} />
-                    </button>
+                    <button onClick={() => onCollectColor(pickedColor)} className="p-2 hover:bg-gray-100 rounded-full text-gray-400 hover:text-indigo-600"><Bookmark size={18} /></button>
                   )}
-                  <button 
-                    onClick={() => navigator.clipboard.writeText(pickedColor)}
-                    className="p-2 hover:bg-gray-100 rounded-full text-gray-400 hover:text-black"
-                    title="复制HEX"
-                  >
-                      <Copy size={18} />
-                  </button>
                   <button onClick={() => setPickedColor(null)} className="p-2 hover:bg-gray-100 rounded-full text-gray-300 hover:text-red-500"><X size={18}/></button>
                 </div>
             </div>
           )}
 
-          {/* Navigation Arrows (Visible on all devices now) */}
+          {/* Nav Arrows */}
           <div className="absolute inset-y-0 left-0 flex items-center px-2 pointer-events-none">
               {hasPrev ? (
                   <button onClick={(e) => { e.stopPropagation(); onPrev?.(); }} className="pointer-events-auto p-2 rounded-full bg-black/10 hover:bg-black/40 text-white/50 hover:text-white transition-all backdrop-blur-[2px]">
@@ -459,113 +493,66 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
                   </button>
               ) : <div></div>}
           </div>
-
-          {/* MOBILE BOTTOM BAR (Overlay) - Hide when editing */}
-          {!isEditing && (
-            <div className="absolute bottom-0 inset-x-0 bg-gradient-to-t from-black/90 to-transparent p-6 pb-safe pt-12 flex items-end justify-between md:hidden z-20 pointer-events-none">
-               <div className="flex-1 min-w-0 mr-4 pointer-events-auto">
-                  <h2 className="text-white font-bold text-lg truncate drop-shadow-md">{photo.title}</h2>
-               </div>
-               <div className="flex items-center gap-3 shrink-0 pointer-events-auto">
-                  <button 
-                    onClick={() => setIsEditing(true)}
-                    className="p-3 rounded-full backdrop-blur-md bg-white/10 text-white transition-all"
-                  >
-                     <Edit2 size={20} />
-                  </button>
-                  <button 
-                    onClick={() => setIsPickerActive(!isPickerActive)}
-                    className={`p-3 rounded-full backdrop-blur-md transition-all ${isPickerActive ? 'bg-white text-black' : 'bg-white/10 text-white'}`}
-                  >
-                     <Pipette size={20} />
-                  </button>
-                  <button 
-                     onClick={handleToggleFavorite}
-                     className={`p-3 rounded-full backdrop-blur-md bg-white/10 transition-all ${photo.isFavorite ? 'text-red-500 bg-white/20' : 'text-white'}`}
-                  >
-                     <Heart size={20} className={photo.isFavorite ? 'fill-current' : ''} />
-                  </button>
-               </div>
-            </div>
-          )}
         </div>
 
-        {/* DETAILS SECTION (Visible on Desktop always, Visible on Mobile ONLY when editing or in flow) */}
-        <div className={`${isEditing ? 'flex' : 'hidden md:flex landscape:flex'} w-full md:w-1/3 flex-col md:h-full bg-white md:overflow-hidden border-l border-gray-100 pb-safe`}>
-          {/* Header */}
-          <div className="p-6 border-b border-gray-100 flex justify-between items-end shrink-0">
-            <div>
-               {/* Date removed from here */}
-            </div>
-            <div className="flex items-center gap-4">
-               {!isEditing && (
-                 <>
-                   {/* Color Picker Toggle Desktop */}
-                   <button 
-                      onClick={() => setIsPickerActive(!isPickerActive)}
-                      className={`flex items-center gap-1 text-xs font-bold uppercase tracking-wider whitespace-nowrap transition-colors ${isPickerActive ? 'text-indigo-600 bg-indigo-50 px-2 py-1 rounded-none' : 'text-gray-400 hover:text-indigo-600'}`}
-                      title="取色器"
-                   >
-                       <Pipette size={16} /> {isPickerActive ? '取色中' : ''}
-                   </button>
-                   
-                   <button 
-                      onClick={toggleFullscreen}
-                      className="flex items-center gap-1 text-xs font-bold uppercase tracking-wider whitespace-nowrap transition-colors text-gray-400 hover:text-black"
-                      title={isFullscreen ? "退出全屏" : "全屏"}
-                   >
-                       {isFullscreen ? <Minimize size={16} /> : <Maximize size={16} />}
-                   </button>
-
-                   <button 
-                       onClick={handleToggleFavorite}
-                       className={`flex items-center gap-1 text-xs font-bold uppercase tracking-wider whitespace-nowrap transition-colors ${photo.isFavorite ? 'text-red-500' : 'text-gray-400 hover:text-red-500'}`}
-                       title="收藏"
-                   >
-                       <Heart size={16} className={photo.isFavorite ? 'fill-current' : ''} />
-                   </button>
-                   <div className="w-px h-4 bg-gray-200 mx-1"></div>
-                   <button 
-                     onClick={handleDeleteClick} 
-                     className={`flex items-center gap-1 text-xs font-bold uppercase tracking-wider whitespace-nowrap transition-colors ${isDeleteConfirm ? 'text-red-600 bg-red-50 px-2 py-1 rounded-none' : 'text-gray-400 hover:text-red-600'}`}
-                     title={isDeleteConfirm ? "确认删除?" : "删除"}
-                   >
-                     {isDeleteConfirm ? "确认?" : <Trash2 size={14} />}
-                   </button>
-                   <button 
-                     onClick={() => setIsEditing(true)} 
-                     className="flex items-center gap-1 text-gray-400 hover:text-gray-900 text-xs font-bold uppercase tracking-wider whitespace-nowrap"
-                   >
-                     <Edit2 size={14} /> 编辑
-                   </button>
-                 </>
-               )}
-               {/* Desktop Close Button */}
-               <button 
-                onClick={onClose}
-                className="hidden md:block text-gray-400 hover:text-gray-900 transition-colors"
-              >
-                <X size={24} />
-              </button>
-            </div>
+        {/* DETAILS SECTION - Responsive: Sidebar on Desktop, Bottom Sheet on Mobile */}
+        <div 
+          className={`
+             flex flex-col bg-white
+             md:w-1/3 md:h-full md:relative md:translate-y-0
+             fixed inset-x-0 bottom-0 z-[70] md:z-auto rounded-none
+             transition-transform duration-300 ease-out
+             ${showMobileInfo ? 'translate-y-0' : 'translate-y-full md:translate-y-0'}
+             max-h-[85vh] md:max-h-full shadow-[0_-10px_40px_rgba(0,0,0,0.3)] md:shadow-none
+             pb-safe
+          `}
+        >
+          {/* Mobile Drag Handle */}
+          <div className="md:hidden w-full flex justify-center py-3 shrink-0" onClick={() => !isEditing && setShowMobileInfo(false)}>
+              <div className="w-10 h-1 bg-gray-300 rounded-full"></div>
           </div>
 
-          {/* Content Scrollable - Added explicit scrolling for landscape */}
-          <div className="flex-1 overflow-y-auto p-6 space-y-8 pb-6 custom-scrollbar h-auto md:h-0 md:min-h-0">
+          {/* Header */}
+          <div className="px-6 py-4 md:p-6 border-b border-gray-100 flex justify-between items-center shrink-0">
+            <div className="flex items-center gap-2">
+                {/* Desktop Buttons */}
+                <div className="hidden md:flex items-center gap-3">
+                    <button onClick={() => setIsPickerActive(!isPickerActive)} className={`flex items-center gap-1 text-xs font-bold uppercase tracking-wider ${isPickerActive ? 'text-indigo-600' : 'text-gray-400 hover:text-indigo-600'}`}>
+                       <Pipette size={16} /> 取色器
+                    </button>
+                    <button onClick={toggleFullscreen} className="text-gray-400 hover:text-black" title="全屏"><Maximize size={16}/></button>
+                    <button onClick={handleToggleFavorite} className={`text-gray-400 hover:text-red-500 ${photo.isFavorite ? 'text-red-500' : ''}`}><Heart size={16} className={photo.isFavorite?'fill-current':''}/></button>
+                    <button onClick={handleDeleteClick} className={`text-gray-400 hover:text-red-600 ${isDeleteConfirm?'text-red-600':''}`}><Trash2 size={16}/></button>
+                    <button onClick={() => setIsEditing(true)} className="text-gray-400 hover:text-gray-900"><Edit2 size={16}/></button>
+                </div>
+                {/* Mobile Title */}
+                <span className="md:hidden text-xs font-bold text-gray-400 uppercase tracking-widest">照片信息</span>
+            </div>
+            
+            {/* Close Button - Desktop: closes modal. Mobile: closes sheet */}
+            <button 
+                onClick={() => {
+                    if (window.innerWidth < 768) setShowMobileInfo(false);
+                    else onClose();
+                }}
+                className="text-gray-400 hover:text-gray-900 p-1"
+            >
+                <X size={24} />
+            </button>
+          </div>
+
+          {/* Content Scrollable */}
+          <div className="flex-1 overflow-y-auto p-6 space-y-8 custom-scrollbar">
             
             {/* Title & Description */}
             <div className="group relative">
-              <div className="flex justify-between items-center mb-1">
-                <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest whitespace-nowrap">基本信息</label>
-              </div>
-
               {isEditing ? (
                 <div className="space-y-4">
                   <input
                     type="text"
                     value={editedTitle}
                     onChange={(e) => setEditedTitle(e.target.value)}
-                    className="w-full text-xl font-bold border-b-2 border-gray-200 focus:border-black focus:outline-none py-2 transition-colors rounded-none bg-transparent"
+                    className="w-full text-xl font-bold border-b-2 border-gray-200 focus:border-black focus:outline-none py-2 bg-transparent"
                     placeholder="标题"
                   />
                   <div className="flex items-center gap-2 mb-2">
@@ -576,7 +563,7 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
                   <textarea
                     value={editedDesc}
                     onChange={(e) => setEditedDesc(e.target.value)}
-                    className="w-full text-sm text-gray-600 border border-gray-200 p-3 focus:border-black focus:outline-none transition-colors bg-gray-50 focus:bg-white rounded-none"
+                    className="w-full text-sm text-gray-600 border border-gray-200 p-3 focus:border-black focus:outline-none bg-gray-50 rounded-none"
                     rows={4}
                     placeholder="添加描述..."
                   />
@@ -584,7 +571,7 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
               ) : (
                 <div>
                   <h1 className="text-2xl font-black text-gray-900 tracking-tight">{photo.title}</h1>
-                  <p className="text-xs font-mono text-gray-400 flex items-center gap-2 uppercase tracking-wide whitespace-nowrap mt-2 mb-4">
+                  <p className="text-xs font-mono text-gray-400 flex items-center gap-2 uppercase tracking-wide mt-2 mb-4">
                     <Calendar size={12} />
                     {new Date(photo.createdAt).toLocaleDateString('zh-CN')}
                   </p>
@@ -595,7 +582,7 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
 
             {/* Category */}
             <div>
-              <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-3 block flex items-center gap-2 whitespace-nowrap">
+              <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-3 block flex items-center gap-2">
                 <Folder size={12} /> 所属相册
               </label>
               {isEditing ? (
@@ -609,7 +596,7 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
                   ))}
                 </select>
               ) : (
-                 <div className="inline-flex items-center gap-2 px-3 py-1.5 border border-gray-200 text-sm font-bold text-gray-700 bg-gray-50 uppercase tracking-wide">
+                 <div className="inline-flex items-center gap-2 px-3 py-1.5 border border-gray-200 text-sm font-bold text-gray-700 bg-gray-50 uppercase tracking-wide rounded-none">
                   <span>{currentCategory?.name || '未分类'}</span>
                 </div>
               )}
@@ -617,7 +604,7 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
 
             {/* Tags */}
             <div>
-              <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-3 block flex items-center gap-2 whitespace-nowrap">
+              <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-3 block flex items-center gap-2">
                 <Tag size={12} /> 标签
               </label>
               <div className="flex flex-wrap gap-2 mb-3">
@@ -631,7 +618,6 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
                     )}
                   </span>
                 ))}
-                {currentTags.length === 0 && !isEditing && <span className="text-gray-300 text-sm italic">无标签</span>}
               </div>
               
               {isEditing && (
@@ -642,11 +628,10 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
                     onChange={(e) => setNewTag(e.target.value)}
                     onKeyDown={(e) => handleAddTag(e)}
                     placeholder="输入标签 + 回车..."
-                    className="w-full text-sm border border-gray-200 px-3 py-2 focus:border-black outline-none bg-gray-50 focus:bg-white rounded-none"
+                    className="w-full text-sm border border-gray-200 px-3 py-2 focus:border-black outline-none bg-gray-50 rounded-none"
                   />
                   {newTag && tagSuggestions.length > 0 && (
-                     <div className="absolute top-full left-0 right-0 bg-white border border-gray-200 shadow-xl mt-0 z-10 max-h-32 overflow-y-auto rounded-none">
-                        <div className="p-2 text-[10px] font-bold text-gray-400 border-b border-gray-100 uppercase tracking-wider flex items-center gap-1 whitespace-nowrap"><Clock size={10}/> 历史记录</div>
+                     <div className="absolute top-full left-0 right-0 bg-white border border-gray-200 shadow-xl mt-1 z-10 max-h-32 overflow-y-auto rounded-none">
                         {tagSuggestions.map(tag => (
                           <button 
                             key={tag}
@@ -661,22 +646,21 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
                 </div>
               )}
             </div>
-
           </div>
           
-          {/* Footer Actions */}
-          <div className="p-6 border-t border-gray-100 bg-gray-50 shrink-0 flex gap-0">
+          {/* Footer Actions (Only visible in Edit Mode or Desktop Footer) */}
+          <div className={`p-6 border-t border-gray-100 bg-gray-50 shrink-0 gap-3 ${isEditing ? 'flex' : 'hidden md:flex'}`}>
             {isEditing ? (
               <>
-                 <button onClick={() => setIsEditing(false)} className="flex-1 py-3 bg-white border border-gray-300 font-bold text-gray-700 hover:bg-gray-50 transition-colors uppercase text-xs tracking-wider rounded-none whitespace-nowrap">
+                 <button onClick={() => { setIsEditing(false); if(window.innerWidth<768) setShowMobileInfo(false); }} className="flex-1 py-3 bg-white border border-gray-300 font-bold text-gray-700 hover:bg-gray-50 uppercase text-xs tracking-wider rounded-none">
                   取消
                 </button>
-                <button onClick={handleSave} className="flex-1 py-3 bg-black border border-transparent font-bold text-white hover:bg-gray-800 transition-colors uppercase text-xs tracking-wider rounded-none whitespace-nowrap">
-                  保存修改
+                <button onClick={handleSave} className="flex-1 py-3 bg-black border border-transparent font-bold text-white hover:bg-gray-800 uppercase text-xs tracking-wider rounded-none">
+                  保存
                 </button>
               </>
             ) : (
-               <button onClick={onClose} className="w-full py-3 bg-white border border-gray-300 font-bold text-gray-700 hover:bg-gray-50 transition-colors uppercase text-xs tracking-wider rounded-none whitespace-nowrap">
+               <button onClick={onClose} className="w-full py-3 bg-white border border-gray-300 font-bold text-gray-700 hover:bg-gray-50 uppercase text-xs tracking-wider rounded-none">
                   关闭
                </button>
             )}

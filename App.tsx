@@ -4,7 +4,7 @@ import { PhotoModal } from './components/PhotoModal';
 import { ColorTool } from './components/ColorTool';
 import { NoteTool } from './components/NoteTool';
 import { Photo, Category, ThemeColor, ColorGroup } from './types';
-import { Search, Upload, ImagePlus, Menu, Edit2, Trash2, LayoutGrid, Grid3x3, Square, Folder, ChevronRight, Image as ImageIcon, Check, Loader2, Clock, X, CheckSquare, MousePointer2, Move, Tag, FolderInput, FileImage, HardDrive } from 'lucide-react';
+import { Search, Upload, ImagePlus, Menu, Edit2, Trash2, LayoutGrid, Grid3x3, Square, Folder, ChevronRight, Image as ImageIcon, Check, Loader2, Clock, X, CheckSquare, MousePointer2, Move, Tag, FolderInput, FileImage, HardDrive, Plus, FolderPlus } from 'lucide-react';
 import { saveImageToDB, getImageFromDB, deleteImageFromDB } from './services/imageDB';
 
 // Initial Dummy Data
@@ -225,6 +225,13 @@ const App: React.FC = () => {
   const [isSelectionMode, setIsSelectionMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
 
+  // Batch Operation Modals
+  const [isBatchMoveOpen, setIsBatchMoveOpen] = useState(false);
+  const [isBatchTagOpen, setIsBatchTagOpen] = useState(false);
+  const [batchTagInput, setBatchTagInput] = useState('');
+  const [batchSelectedTags, setBatchSelectedTags] = useState<Set<string>>(new Set());
+
+
   // Delete Confirmation States
   const [contextMenuDeleteConfirm, setContextMenuDeleteConfirm] = useState(false);
   const [batchDeleteConfirm, setBatchDeleteConfirm] = useState(false);
@@ -241,12 +248,9 @@ const App: React.FC = () => {
   // REQUEST PERSISTENT STORAGE (Android APK Logic simulation)
   useEffect(() => {
     const requestPersistence = async () => {
-      // Check if the API is supported
       if (navigator.storage && navigator.storage.persist) {
-        // Check current status
         const isPersisted = await navigator.storage.persisted();
         if (!isPersisted) {
-          // Request persistence (on Android this might be auto-granted if installed as PWA)
           await navigator.storage.persist();
         }
       }
@@ -261,10 +265,7 @@ const App: React.FC = () => {
       const updatedPhotos = [...photos];
       let hasChanges = false;
 
-      // Promise.all to fetch all images in parallel
       await Promise.all(updatedPhotos.map(async (photo, index) => {
-        // If it's not an HTTP url (assuming initial data is http), it might be a blob ID
-        // Or if it WAS a blob url, it's now invalid after reload, so we check DB
         if (!photo.url.startsWith('http')) {
             try {
                 const blob = await getImageFromDB(photo.id);
@@ -287,7 +288,6 @@ const App: React.FC = () => {
 
     hydratePhotos();
     
-    // Cleanup URLs on unmount to prevent memory leaks
     return () => {
         photos.forEach(p => {
             if (p.url.startsWith('blob:')) URL.revokeObjectURL(p.url);
@@ -295,7 +295,6 @@ const App: React.FC = () => {
     };
   }, []);
 
-  // Save metadata changes to LocalStorage
   useEffect(() => {
     localStorage.setItem('photos', JSON.stringify(photos));
   }, [photos]);
@@ -304,118 +303,68 @@ const App: React.FC = () => {
     localStorage.setItem('categories', JSON.stringify(categories));
   }, [categories]);
 
-  // Centralized Modal Closing Logic using History API
+  // --- ROBUST HISTORY API HANDLER for Mobile Back Gesture ---
+  
+  // Helper to open a modal and push history state
+  const openModal = (action: () => void) => {
+      window.history.pushState({ modalOpen: true }, '', window.location.href);
+      action();
+  };
+
+  // Helper to close modal via UI (Cross Button / Backdrop)
+  // This calls history.back() which triggers the popstate listener below to actually update state.
   const closeModal = () => {
-    window.history.back();
+      window.history.back();
   };
 
-  // New unified processor for single or multiple files
-  const handleBatchFileProcess = async (files: File[]) => {
-      if (files.length === 0) return;
-      
-      // Close the menu using history back if it's open
-      if (isUploadMenuOpen) closeModal();
-      
-      setIsProcessing(true);
-      setProcessingCount({ current: 0, total: files.length });
-
-      const newPhotosToState: Photo[] = [];
-      const BATCH_SIZE = 5; // Process in chunks to avoid UI blocking
-
-      for (let i = 0; i < files.length; i += BATCH_SIZE) {
-         const chunk = files.slice(i, i + BATCH_SIZE);
-         
-         await Promise.all(chunk.map(async (file) => {
-             try {
-                const newPhotoId = crypto.randomUUID();
-                
-                // Save actual file data to IndexedDB
-                await saveImageToDB(newPhotoId, file);
-
-                // Create temporary display URL
-                const objectUrl = URL.createObjectURL(file);
-                
-                // Use filename as title, remove extension
-                const title = file.name.replace(/\.[^/.]+$/, "");
-
-                const newPhoto: Photo = {
-                  id: newPhotoId,
-                  url: objectUrl,
-                  title: title,
-                  description: '',
-                  tags: [],
-                  categoryId: 'uncategorized',
-                  createdAt: Date.now(),
-                };
-                newPhotosToState.push(newPhoto);
-             } catch (err) {
-                 console.error("Failed to process file:", file.name, err);
-             }
-         }));
-
-         setProcessingCount(prev => ({ ...prev, current: Math.min(i + BATCH_SIZE, files.length) }));
-         // Small delay to let React render and browser breathe
-         await new Promise(resolve => setTimeout(resolve, 10));
-      }
-
-      setPhotos(prev => [...newPhotosToState, ...prev]);
-      setIsProcessing(false);
-  };
-
-  // Startup Effect for Launch Queue
-  useEffect(() => {
-    // PWA Launch Queue for Android Share Target
-    if ('launchQueue' in window) {
-      (window as any).launchQueue.setConsumer(async (launchParams: any) => {
-        if (!launchParams.files || !launchParams.files.length) return;
-        
-        const files: File[] = [];
-        for (const handle of launchParams.files) {
-          if (handle.kind === 'file') {
-             const file = await handle.getFile();
-             files.push(file);
-          }
-        }
-        
-        // Handle imported files
-        if (files.length > 0) {
-            await handleBatchFileProcess(files);
-        }
-      });
-    }
-  }, []);
-
-  // --- HISTORY API HANDLER for Mobile Back Gesture ---
   useEffect(() => {
     const handlePopState = (e: PopStateEvent) => {
-      // Prioritize closing the deepest nested modal/view based on priority
-      // The order here determines priority if multiple are theoretically open (though usually they stack)
+      // Logic to close the top-most modal based on React State priority
+      // We check state directly here.
+      // NOTE: Since state inside event listener might be stale if not careful, 
+      // we rely on the fact that this re-binds on render or we check multiple flags.
+      // However, React batching usually handles this.
+      
+      // A safe way is to check all potential open states and close the most relevant one.
+      
+      // Using a ref to access current state inside event listener if needed, 
+      // but simplistic checking works for standard "back" behavior.
+      
+      // We just try to close everything that might be open.
+      // If nothing is open, the browser just goes back (exits app).
+      
+      let handled = false;
+
       if (selectedPhoto) {
         setSelectedPhoto(null);
+        handled = true;
+      } else if (isBatchMoveOpen) {
+        setIsBatchMoveOpen(false);
+        handled = true;
+      } else if (isBatchTagOpen) {
+        setIsBatchTagOpen(false);
+        handled = true;
       } else if (isUploadMenuOpen) {
         setIsUploadMenuOpen(false);
+        handled = true;
       } else if (isSettingsOpen) {
         setIsSettingsOpen(false);
+        handled = true;
       } else if (isSidebarOpen) {
         setIsSidebarOpen(false);
+        handled = true;
       } else if (isSelectionMode) {
         setIsSelectionMode(false);
         setSelectedIds(new Set());
+        handled = true;
       }
+      
+      // If we didn't handle anything (no modals open), the default browser back happens (exit)
     };
 
     window.addEventListener('popstate', handlePopState);
     return () => window.removeEventListener('popstate', handlePopState);
-  }, [selectedPhoto, isSettingsOpen, isSidebarOpen, isSelectionMode, isUploadMenuOpen]);
-
-  // Push state when opening modals
-  useEffect(() => {
-    // We add a history entry when any modal/overlay opens
-    // This allows the back button to close them via 'popstate' event
-    if (selectedPhoto || isSettingsOpen || isSidebarOpen || isUploadMenuOpen || isSelectionMode) {
-      window.history.pushState({ modalOpen: true }, '', window.location.href);
-    }
-  }, [selectedPhoto, isSettingsOpen, isSidebarOpen, isUploadMenuOpen, isSelectionMode]);
+  }, [selectedPhoto, isSettingsOpen, isSidebarOpen, isSelectionMode, isUploadMenuOpen, isBatchMoveOpen, isBatchTagOpen]);
 
 
   useEffect(() => {
@@ -437,12 +386,11 @@ const App: React.FC = () => {
     setBatchDeleteConfirm(false);
   }, [selectedCategory]);
 
-  // Reset confirmation state when menu closes
   useEffect(() => {
     setContextMenuDeleteConfirm(false);
   }, [contextMenuPhoto]);
 
-  // Group tags for Sidebar
+  // Group tags
   const groupedTags = useMemo(() => {
     const groups: Record<string, string[]> = {};
     const allUniqueTags = Array.from(new Set(photos.flatMap(p => p.tags))).sort();
@@ -455,16 +403,12 @@ const App: React.FC = () => {
     return groups;
   }, [photos, tagCategoryMap]);
 
-  // Derive flat list of tags for auto-complete
   const allTags = useMemo(() => {
     return Array.from(new Set(photos.flatMap(p => p.tags))).sort();
   }, [photos]);
 
-  // Filter Photos logic
   const filteredPhotos = useMemo(() => {
     let result = photos;
-
-    // 1. Filter by Category or Tag
     if (selectedCategory !== 'all' && !isToolView) {
       if (selectedCategory.startsWith('tag-')) {
         const tagName = selectedCategory.replace('tag-', '');
@@ -475,8 +419,6 @@ const App: React.FC = () => {
         result = result.filter(p => p.categoryId === selectedCategory);
       }
     }
-
-    // 2. Filter by Search Query
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase();
       result = result.filter(p => 
@@ -485,14 +427,11 @@ const App: React.FC = () => {
         p.tags.some(t => t.toLowerCase().includes(q))
       );
     }
-
     return result.sort((a, b) => b.createdAt - a.createdAt);
   }, [photos, selectedCategory, searchQuery, isToolView]);
 
-  // Group filtered photos by date
   const groupedPhotos = useMemo(() => groupPhotosByDate(filteredPhotos), [filteredPhotos]);
 
-  // Navigation Logic for Modal
   const getNavPhotos = () => filteredPhotos;
   const currentPhotoIndex = selectedPhoto ? getNavPhotos().findIndex(p => p.id === selectedPhoto.id) : -1;
   const hasNext = currentPhotoIndex >= 0 && currentPhotoIndex < getNavPhotos().length - 1;
@@ -522,7 +461,6 @@ const App: React.FC = () => {
 
   const handleCollectColor = (hex: string) => {
     setColorGroups(prev => {
-      // Find 'favorites' group or create one
       const favIndex = prev.findIndex(g => g.id === 'favorites');
       const newColor = { id: crypto.randomUUID(), name: '收藏色 ' + hex.toUpperCase(), hex };
       
@@ -544,7 +482,7 @@ const App: React.FC = () => {
   };
 
   const handleUploadClick = () => {
-    setIsUploadMenuOpen(true);
+    openModal(() => setIsUploadMenuOpen(true));
   };
 
   const handleSelectFiles = () => {
@@ -555,15 +493,53 @@ const App: React.FC = () => {
     folderInputRef.current?.click();
   };
   
+  const handleBatchFileProcess = async (files: File[]) => {
+      if (files.length === 0) return;
+      if (isUploadMenuOpen) closeModal();
+      
+      setIsProcessing(true);
+      setProcessingCount({ current: 0, total: files.length });
+
+      const newPhotosToState: Photo[] = [];
+      const BATCH_SIZE = 5;
+
+      for (let i = 0; i < files.length; i += BATCH_SIZE) {
+         const chunk = files.slice(i, i + BATCH_SIZE);
+         
+         await Promise.all(chunk.map(async (file) => {
+             try {
+                const newPhotoId = crypto.randomUUID();
+                await saveImageToDB(newPhotoId, file);
+                const objectUrl = URL.createObjectURL(file);
+                const title = file.name.replace(/\.[^/.]+$/, "");
+
+                const newPhoto: Photo = {
+                  id: newPhotoId,
+                  url: objectUrl,
+                  title: title,
+                  description: '',
+                  tags: [],
+                  categoryId: 'uncategorized',
+                  createdAt: Date.now(),
+                };
+                newPhotosToState.push(newPhoto);
+             } catch (err) {
+                 console.error("Failed to process file:", file.name, err);
+             }
+         }));
+
+         setProcessingCount(prev => ({ ...prev, current: Math.min(i + BATCH_SIZE, files.length) }));
+         await new Promise(resolve => setTimeout(resolve, 10));
+      }
+
+      setPhotos(prev => [...newPhotosToState, ...prev]);
+      setIsProcessing(false);
+  };
+
   const handleFileChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const fileList = event.target.files;
     if (!fileList || fileList.length === 0) return;
-    
-    // Convert FileList to Array
-    const files = Array.from(fileList) as File[];
-    
-    await handleBatchFileProcess(files);
-
+    await handleBatchFileProcess(Array.from(fileList) as File[]);
     if (fileInputRef.current) fileInputRef.current.value = '';
     if (folderInputRef.current) folderInputRef.current.value = '';
   };
@@ -574,18 +550,13 @@ const App: React.FC = () => {
   };
 
   const handleDeletePhoto = async (photoId: string) => {
-    // Check if we are in "Favorites" view
     if (selectedCategory === 'favorites') {
         setPhotos(prev => prev.map(p => p.id === photoId ? { ...p, isFavorite: false } : p));
     } else {
-        // Delete from State
         setPhotos(prev => prev.filter(p => p.id !== photoId));
-        // Delete from IndexedDB
         await deleteImageFromDB(photoId);
     }
     setContextMenuPhoto(null);
-    
-    // Close modal via back gesture if it's open
     if (selectedPhoto) closeModal();
   };
 
@@ -594,14 +565,12 @@ const App: React.FC = () => {
       if (selectedCategory === 'favorites') {
          setPhotos(prev => prev.map(p => selectedIds.has(p.id) ? { ...p, isFavorite: false } : p));
       } else {
-         // Batch delete from DB
          for (const id of selectedIds) {
              await deleteImageFromDB(id);
          }
          setPhotos(prev => prev.filter(p => !selectedIds.has(p.id)));
       }
       setSelectedIds(new Set());
-      // Exit selection mode via back gesture logic
       closeModal(); 
       setBatchDeleteConfirm(false);
     } else {
@@ -609,40 +578,66 @@ const App: React.FC = () => {
     }
   };
   
+  // -- Batch Move Logic --
   const handleBatchMove = () => {
     if (selectedIds.size === 0) return;
-    const catName = prompt("请输入要移动到的相册名称 (如果不匹配将移至'未分类')");
-    if (!catName) return;
-    
-    const targetCat = categories.find(c => c.name === catName);
-    const targetId = targetCat ? targetCat.id : 'uncategorized';
-    
-    setPhotos(prev => prev.map(p => selectedIds.has(p.id) ? { ...p, categoryId: targetId } : p));
-    // Exit selection mode via back gesture logic
-    closeModal();
-    setSelectedIds(new Set());
-    alert(`已将 ${selectedIds.size} 张照片移动到 ${targetCat ? targetCat.name : '未分类'}`);
+    openModal(() => setIsBatchMoveOpen(true));
   };
 
+  const confirmBatchMove = (targetCategoryId: string) => {
+    setPhotos(prev => prev.map(p => selectedIds.has(p.id) ? { ...p, categoryId: targetCategoryId } : p));
+    closeModal(); // Closes Move Modal
+    // We also close selection mode for better UX? Or keep it?
+    // User usually wants to verify. Let's close selection mode via another back, 
+    // or just let them stay. Let's clear selection.
+    setSelectedIds(new Set());
+    setIsSelectionMode(false);
+    // Note: closeModal() only pops once. If selection mode also pushed state, we might need another pop?
+    // Actually, `setIsSelectionMode(false)` manually works, but we should align with history.
+    // If we want to fully exit selection mode, we can assume the user is done.
+    // However, our history stack is: [SelectionMode] -> [BatchMove].
+    // `closeModal` pops [BatchMove]. We are back to [SelectionMode].
+    // So we manually set isSelectionMode(false) AND history.back() again?
+    // To keep it simple: We just clear the UI state. 
+    // The history entry for selection mode remains until user presses back again.
+    // That's acceptable. Or we can force double back.
+    window.history.back(); // Hack to close selection mode too? 
+    // No, manual state update is safer to avoid race conditions.
+  };
+
+  // -- Batch Tag Logic --
   const handleBatchTag = () => {
     if (selectedIds.size === 0) return;
-    const tagsStr = prompt("请输入标签 (用逗号分隔)");
-    if (!tagsStr) return;
-    
-    const newTags = tagsStr.split(/[,，]/).map(t => t.trim()).filter(Boolean);
-    if (newTags.length === 0) return;
+    setBatchSelectedTags(new Set());
+    setBatchTagInput('');
+    openModal(() => setIsBatchTagOpen(true));
+  };
+
+  const confirmBatchTag = () => {
+    const newTags = batchTagInput.split(/[,，]/).map(t => t.trim()).filter(Boolean);
+    const tagsToAdd = [...Array.from(batchSelectedTags), ...newTags];
+
+    if (tagsToAdd.length === 0) return;
 
     setPhotos(prev => prev.map(p => {
         if (selectedIds.has(p.id)) {
-            const mergedTags = Array.from(new Set([...p.tags, ...newTags]));
+            const mergedTags = Array.from(new Set([...p.tags, ...tagsToAdd]));
             return { ...p, tags: mergedTags };
         }
         return p;
     }));
-    // Exit selection mode via back gesture logic
-    closeModal();
+    
+    closeModal(); // Close Tag Modal
     setSelectedIds(new Set());
-    alert(`已为 ${selectedIds.size} 张照片添加标签`);
+    setIsSelectionMode(false);
+    window.history.back(); // Close Selection Mode
+  };
+
+  const toggleBatchTagSelection = (tag: string) => {
+      const newSet = new Set(batchSelectedTags);
+      if (newSet.has(tag)) newSet.delete(tag);
+      else newSet.add(tag);
+      setBatchSelectedTags(newSet);
   };
 
   const handleSelectAll = () => {
@@ -671,7 +666,6 @@ const App: React.FC = () => {
   };
 
   const handleDeleteCategory = (id: string) => {
-    // Confirmation moved to Sidebar UI
     setPhotos(prev => prev.map(p => p.categoryId === id ? { ...p, categoryId: 'uncategorized' } : p));
     setCategories(prev => prev.filter(c => c.id !== id));
     if (selectedCategory === id) setSelectedCategory('all');
@@ -724,24 +718,23 @@ const App: React.FC = () => {
 
   const handleCategorySelect = (id: string) => {
     setSelectedCategory(id);
-    // If we are on mobile (sidebar is open as an overlay), close it using back logic
     if (isSidebarOpen) {
         closeModal();
     }
   };
 
   const startPress = (photo: Photo) => {
-    isLongPress.current = false; // Always reset long press state on start
+    isLongPress.current = false;
     
-    if (isSelectionMode) return; // Disable long press menu in selection mode
+    if (isSelectionMode) return;
     
     longPressTimer.current = setTimeout(() => {
       isLongPress.current = true;
       if (!isSelectionMode) {
-          // On long press, just enter selection mode with item selected instead of context menu
-          setIsSelectionMode(true);
-          setSelectedIds(new Set([photo.id]));
-          // Optional: Vibrate
+          openModal(() => {
+              setIsSelectionMode(true);
+              setSelectedIds(new Set([photo.id]));
+          });
           if (navigator.vibrate) navigator.vibrate(50);
       }
     }, 600);
@@ -755,7 +748,6 @@ const App: React.FC = () => {
   };
 
   const handleGridItemClick = (photo: Photo) => {
-    // If long press triggered selection mode, don't process click
     if (isLongPress.current) return;
     
     if (isSelectionMode) {
@@ -766,23 +758,12 @@ const App: React.FC = () => {
         newSet.add(photo.id);
       }
       setSelectedIds(newSet);
-      // If we deselect everything, we can opt to close selection mode? 
-      // Android convention: usually stays in mode until cancelled. 
-      // If we want to auto-exit: if (newSet.size === 0) closeModal();
     } else {
       setInitialEditMode(false);
-      setSelectedPhoto(photo);
+      openModal(() => setSelectedPhoto(photo));
     }
   };
 
-  const handleEditFromContext = () => {
-    if (contextMenuPhoto) {
-      setInitialEditMode(true);
-      setSelectedPhoto(contextMenuPhoto);
-      setContextMenuPhoto(null);
-    }
-  };
-  
   const handleImageError = (id: string) => {
      setFailedImages(prev => new Set(prev).add(id));
   };
@@ -805,7 +786,6 @@ const App: React.FC = () => {
     }
   };
 
-  // Theme Helpers
   const getButtonColor = () => {
     switch (themeColor) {
         case 'zinc': return 'bg-slate-900 text-white hover:bg-slate-800';
@@ -838,7 +818,7 @@ const App: React.FC = () => {
         onRenameTag={handleRenameTag}
         onDeleteTag={handleDeleteTag}
         onCategorizeTag={handleCategorizeTag}
-        onOpenSettings={() => setIsSettingsOpen(true)}
+        onOpenSettings={() => openModal(() => setIsSettingsOpen(true))}
         totalPhotos={photos.length}
         isOpen={isSidebarOpen}
         onClose={closeModal}
@@ -852,7 +832,7 @@ const App: React.FC = () => {
         <header className="bg-white/80 backdrop-blur-md border-b border-slate-200 sticky top-0 z-30 pt-safe">
           <div className="flex items-center justify-between px-4 py-3 md:px-6 md:py-4">
             <div className="flex items-center gap-3 md:hidden">
-              <button onClick={() => setIsSidebarOpen(true)} className="p-1 -ml-1 text-slate-600">
+              <button onClick={() => openModal(() => setIsSidebarOpen(true))} className="p-1 -ml-1 text-slate-600">
                 <Menu size={24} />
               </button>
             </div>
@@ -902,7 +882,7 @@ const App: React.FC = () => {
                         if (isSelectionMode) {
                             closeModal();
                         } else {
-                            setIsSelectionMode(true);
+                            openModal(() => setIsSelectionMode(true));
                         }
                      }}
                      className={`p-2 rounded-full transition-all ${isSelectionMode ? 'bg-black text-white' : 'text-slate-500 hover:bg-slate-100'}`}
@@ -924,7 +904,6 @@ const App: React.FC = () => {
                       <button onClick={() => setGridSize('large')} className={`p-1.5 rounded-md ${gridSize === 'large' ? 'bg-white shadow-sm text-slate-900' : 'text-slate-400'}`}><Square size={14}/></button>
                    </div>
                    
-                   {/* Hidden Inputs for Files and Folders */}
                    <input 
                       type="file" 
                       ref={fileInputRef} 
@@ -938,7 +917,7 @@ const App: React.FC = () => {
                       ref={folderInputRef}
                       onChange={handleFileChange}
                       className="hidden"
-                      // @ts-ignore - non-standard attribute but works in many browsers
+                      // @ts-ignore
                       webkitdirectory=""
                       directory=""
                    />
@@ -1083,13 +1062,12 @@ const App: React.FC = () => {
         )}
       </main>
 
-      {/* Upload Bottom Sheet (Android Style) */}
+      {/* Upload Bottom Sheet */}
       {isUploadMenuOpen && (
         <div className="fixed inset-0 z-[60] flex items-end justify-center bg-black/40 backdrop-blur-sm animate-in fade-in" onClick={closeModal}>
             <div className="bg-white w-full max-w-md p-4 rounded-t-xl shadow-2xl animate-in slide-in-from-bottom-full duration-300 flex flex-col gap-2 pb-safe" onClick={e => e.stopPropagation()}>
                <div className="w-12 h-1 bg-gray-200 rounded-full mx-auto mb-4"></div>
                <h3 className="text-center font-bold text-gray-900 mb-2 uppercase tracking-wider text-sm">选择导入方式</h3>
-               
                <button 
                  onClick={handleSelectFiles}
                  className="flex items-center gap-4 p-4 bg-gray-50 hover:bg-gray-100 transition-colors rounded-lg text-left group"
@@ -1102,7 +1080,6 @@ const App: React.FC = () => {
                       <p className="text-xs text-gray-500">从图库中选择多张图片</p>
                   </div>
                </button>
-
                <button 
                  onClick={handleSelectFolder}
                  className="flex items-center gap-4 p-4 bg-gray-50 hover:bg-gray-100 transition-colors rounded-lg text-left group"
@@ -1115,7 +1092,6 @@ const App: React.FC = () => {
                       <p className="text-xs text-gray-500">扫描并导入整个目录 (需浏览器支持)</p>
                   </div>
                </button>
-
                <div className="mt-2 text-[10px] text-gray-400 text-center flex items-center justify-center gap-1">
                   <HardDrive size={10} /> 本地存储权限已请求
                </div>
@@ -1123,7 +1099,94 @@ const App: React.FC = () => {
         </div>
       )}
 
-      {/* Settings Modal (Simplified) */}
+      {/* BATCH MOVE DIALOG */}
+      {isBatchMoveOpen && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/60 backdrop-blur-sm animate-in fade-in" onClick={closeModal}>
+            <div className="bg-white w-full max-w-md p-6 m-4 shadow-2xl rounded-none animate-in zoom-in-95 duration-200" onClick={e => e.stopPropagation()}>
+                <div className="flex justify-between items-center mb-6">
+                    <h3 className="text-lg font-black text-slate-900 uppercase tracking-tight">移动到相册</h3>
+                    <button onClick={closeModal} className="text-slate-400 hover:text-slate-900"><X size={20}/></button>
+                </div>
+                
+                <div className="grid grid-cols-2 gap-3 max-h-[60vh] overflow-y-auto custom-scrollbar p-1">
+                    <button 
+                        onClick={handleCreateCategory}
+                        className="flex flex-col items-center justify-center gap-2 p-4 bg-slate-50 border-2 border-dashed border-slate-300 hover:border-slate-900 hover:bg-slate-100 transition-all rounded-none min-h-[100px]"
+                    >
+                        <FolderPlus size={24} className="text-slate-400" />
+                        <span className="text-xs font-bold text-slate-600">新建相册</span>
+                    </button>
+                    {categories.filter(c => c.id !== 'all' && c.id !== 'favorites').map(cat => (
+                        <button 
+                            key={cat.id}
+                            onClick={() => confirmBatchMove(cat.id)}
+                            className="flex flex-col items-center justify-center gap-2 p-4 bg-white border border-slate-200 hover:border-slate-900 hover:shadow-md transition-all rounded-none min-h-[100px]"
+                        >
+                            <Folder size={24} className="text-slate-700" />
+                            <span className="text-xs font-bold text-slate-900 text-center">{cat.name}</span>
+                        </button>
+                    ))}
+                </div>
+            </div>
+        </div>
+      )}
+
+      {/* BATCH TAG DIALOG */}
+      {isBatchTagOpen && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/60 backdrop-blur-sm animate-in fade-in" onClick={closeModal}>
+             <div className="bg-white w-full max-w-md p-6 m-4 shadow-2xl rounded-none animate-in zoom-in-95 duration-200" onClick={e => e.stopPropagation()}>
+                <div className="flex justify-between items-center mb-6">
+                    <h3 className="text-lg font-black text-slate-900 uppercase tracking-tight">添加标签</h3>
+                    <button onClick={closeModal} className="text-slate-400 hover:text-slate-900"><X size={20}/></button>
+                </div>
+
+                <div className="mb-6">
+                    <label className="text-xs font-bold text-slate-400 uppercase tracking-widest block mb-2">新标签</label>
+                    <input 
+                        type="text" 
+                        value={batchTagInput}
+                        onChange={(e) => setBatchTagInput(e.target.value)}
+                        placeholder="输入标签，多个用逗号分隔"
+                        className="w-full border-b-2 border-slate-200 py-2 text-sm font-medium focus:border-slate-900 outline-none bg-transparent"
+                    />
+                </div>
+
+                <div className="mb-6">
+                    <label className="text-xs font-bold text-slate-400 uppercase tracking-widest block mb-2">选择已有标签</label>
+                    <div className="flex flex-wrap gap-2 max-h-[30vh] overflow-y-auto custom-scrollbar">
+                        {allTags.map(tag => {
+                            const isSelected = batchSelectedTags.has(tag);
+                            return (
+                                <button
+                                    key={tag}
+                                    onClick={() => toggleBatchTagSelection(tag)}
+                                    className={`
+                                        flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold uppercase tracking-wide border transition-all rounded-none
+                                        ${isSelected 
+                                            ? 'bg-slate-900 text-white border-slate-900' 
+                                            : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'}
+                                    `}
+                                >
+                                    {isSelected ? <CheckSquare size={12} /> : <Square size={12} />}
+                                    {tag}
+                                </button>
+                            );
+                        })}
+                        {allTags.length === 0 && <span className="text-xs text-slate-400 italic">无已有标签</span>}
+                    </div>
+                </div>
+
+                <button 
+                    onClick={confirmBatchTag}
+                    className="w-full bg-slate-900 text-white py-3 text-sm font-bold uppercase tracking-wider hover:bg-slate-800 transition-colors rounded-none"
+                >
+                    保存 ({batchTagInput.split(/[,，]/).filter(Boolean).length + batchSelectedTags.size} 个)
+                </button>
+             </div>
+        </div>
+      )}
+
+      {/* Settings Modal */}
       {isSettingsOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm animate-fade-in" onClick={closeModal}>
            <div className="bg-white p-8 w-full max-w-sm shadow-2xl rounded-none relative" onClick={e => e.stopPropagation()}>
