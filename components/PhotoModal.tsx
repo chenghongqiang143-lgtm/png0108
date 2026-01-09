@@ -68,10 +68,9 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
   onCollectColor
 }) => {
   // Modes: 'view' | 'meta-edit' | 'image-edit'
-  // 'meta-edit' now strictly implies editing Title & Description
   const [viewMode, setViewMode] = useState<'view' | 'meta-edit' | 'image-edit'>('view');
   
-  // Meta Edit State (Title/Description Only)
+  // Meta Edit State
   const [editedTitle, setEditedTitle] = useState('');
   const [editedDesc, setEditedDesc] = useState('');
   
@@ -97,6 +96,7 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [isDragging, setIsDragging] = useState(false);
   const dragStart = useRef({ x: 0, y: 0 });
+  const lastTapRef = useRef(0);
 
   // Swipe State
   const [swipeOffset, setSwipeOffset] = useState(0);
@@ -169,17 +169,15 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
         }
 
         if (e.touches.length === 2) {
+            e.preventDefault(); // Crucial to prevent browser native zoom/pan interference
             gesture.isPinching = true;
             gesture.initialDist = getDistance(e.touches);
             gesture.initialZoom = state.zoomLevel;
-            // Disable transition immediately
             setIsDragging(true); 
         } else if (e.touches.length === 1) {
             gesture.isDragging = true;
             gesture.startTouch = { x: e.touches[0].clientX, y: e.touches[0].clientY };
             gesture.startPan = { ...state.pan };
-            // Note: We set isDragging(true) via state, which might have a slight delay for render,
-            // but we track gesture.isDragging immediately for logic.
             setIsDragging(true);
         }
     };
@@ -205,15 +203,15 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
             const dy = e.touches[0].clientY - gesture.startTouch.y;
 
             if (state.zoomLevel > 1 || state.cropModeActive) {
-                e.preventDefault(); // Stop browser scroll
+                e.preventDefault(); // Stop browser scroll if zoomed in
                 setPan({
                     x: gesture.startPan.x + dx,
                     y: gesture.startPan.y + dy
                 });
             } else if (state.viewMode === 'view') {
-                // Swipe Logic
+                // Swipe Logic - only if horizontal
                 if (Math.abs(dx) > Math.abs(dy) && Math.abs(dx) > 10) {
-                     e.preventDefault(); // Stop horizontal scroll
+                     e.preventDefault();
                      setSwipeOffset(dx);
                 }
             }
@@ -233,9 +231,25 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
             gesture.isDragging = false;
             setIsDragging(false);
 
+            // Double Tap to Zoom Detection
+            const now = Date.now();
+            if (now - lastTapRef.current < 300) {
+                e.preventDefault();
+                if (state.zoomLevel > 1) {
+                    setZoomLevel(1);
+                    setPan({x: 0, y: 0});
+                } else {
+                    setZoomLevel(2.5); // Fixed 2.5x zoom
+                    setPan({x: 0, y: 0});
+                }
+                lastTapRef.current = 0;
+            } else {
+                lastTapRef.current = now;
+            }
+
             // Handle Swipe Actions or Reset
             if (state.zoomLevel <= 1 && !state.cropModeActive) {
-                setZoomLevel(1); 
+                if (state.zoomLevel < 1) setZoomLevel(1); // Elastic bounce back if zoomed out too much
                 setPan({ x: 0, y: 0 });
 
                 if (state.viewMode === 'view') {
@@ -251,16 +265,10 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
                          }
                     } else {
                         setSwipeOffset(0);
-                        // Tap / Swipe Down detection
+                        // Swipe down to close / up for info
                         const dy = e.changedTouches[0].clientY - gesture.startTouch.y;
                         const dx = e.changedTouches[0].clientX - gesture.startTouch.x;
                         
-                        // If it was a tap (very little movement)
-                        if (Math.abs(dx) < 10 && Math.abs(dy) < 10) {
-                           // This is handled by onClick usually, but we can do swipe down here
-                        }
-                        
-                        // Swipe down to close
                         if (Math.abs(state.swipeOffset) < 10 && dy > 60 && Math.abs(dx) < 30) {
                             onClose();
                         } else if (Math.abs(state.swipeOffset) < 10 && dy < -60 && Math.abs(dx) < 30) {
@@ -269,7 +277,6 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
                     }
                 }
             } else if (state.zoomLevel < 1) {
-                // Reset elastic zoom out
                 setZoomLevel(1);
                 setPan({ x: 0, y: 0 });
             }
@@ -286,11 +293,11 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
         el.removeEventListener('touchend', handleTouchEnd);
     };
 
-  }, [isOpen]); // Run when open state changes
+  }, [isOpen]); 
 
+  // Sync logic for switching photos
   useEffect(() => {
     if (photo) {
-      // Only reset local edit state if the PHOTO ID changes.
       if (photo.id !== prevPhotoIdRef.current) {
           setEditedTitle(photo.title);
           setEditedDesc(photo.description);
@@ -318,16 +325,16 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
           }, 300); 
           return () => clearTimeout(timer);
       } else {
-          // If ID matches, just update the active photo object (e.g. for new tags)
           setActivePhoto(photo);
       }
     }
   }, [photo, isOpen, initialEditMode]);
 
+  // Keyboard Nav
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
         if (!isOpen) return;
-        if (viewMode === 'image-edit') return; // Disable nav during edit
+        if (viewMode === 'image-edit') return; 
 
         if (e.key === 'ArrowLeft' && hasPrev && onPrev && viewMode === 'view') {
             setDirection('left');
@@ -355,7 +362,6 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
 
   if (!isOpen || !photo || !activePhoto) return null;
 
-  // --- Instant Updates (Category & Tags) ---
   const handleCategoryChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
       onUpdate({ ...photo, categoryId: e.target.value });
   };
@@ -381,7 +387,6 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
     });
   };
 
-  // --- Meta Save (Title & Desc) ---
   const handleMetaSave = () => {
     onUpdate({
       ...photo,
@@ -394,7 +399,6 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
     }
   };
 
-  // --- Image Edit Save (Canvas) ---
   const handleImageSave = async () => {
     if (!imgRef.current) return;
     setIsProcessing(true);
@@ -406,7 +410,6 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
         if (!ctx) throw new Error("Canvas context not supported");
 
         if (cropModeActive && imgContainerRef.current) {
-            // WYSIWYG Crop
             const container = imgContainerRef.current;
             const rect = container.getBoundingClientRect();
             const exportScale = 2;
@@ -424,14 +427,12 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
             ctx.drawImage(img, -img.naturalWidth / 2, -img.naturalHeight / 2);
             
         } else {
-            // Arbitrary Rotation Logic
             const rads = (editRotation * Math.PI) / 180;
             const c = Math.cos(rads);
             const s = Math.sin(rads);
             const originalWidth = img.naturalWidth;
             const originalHeight = img.naturalHeight;
 
-            // Calculate new bounding box dimensions
             canvas.width = Math.abs(originalWidth * c) + Math.abs(originalHeight * s);
             canvas.height = Math.abs(originalWidth * s) + Math.abs(originalHeight * c);
 
@@ -488,7 +489,6 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
       }
   };
 
-  // Zoom Logic
   const handleZoomIn = () => setZoomLevel(prev => Math.min(prev + 0.5, 4));
   const handleZoomOut = () => {
     setZoomLevel(prev => {
@@ -498,7 +498,6 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
     });
   };
 
-  // Color extraction logic
   const extractColor = (clientX: number, clientY: number) => {
     if (!imgRef.current) return;
     const img = imgRef.current;
@@ -519,7 +518,7 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
     } catch (e) { console.error("Color pick failed", e); }
   };
 
-  // Mouse Event Handlers (Desktop)
+  // Mouse Handlers
   const handleMouseDown = (e: React.MouseEvent) => {
     if (isPickerActive) { extractColor(e.clientX, e.clientY); return; }
     if (zoomLevel <= 1 && viewMode === 'view' && !cropModeActive) return; 
@@ -564,7 +563,6 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
         {/* IMAGE SECTION */}
         <div 
             ref={imgContainerRef}
-            // Removed React Touch Handlers in favor of native listeners in useEffect
             onMouseDown={handleMouseDown} onMouseMove={handleMouseMove} onMouseUp={handleMouseUp} onMouseLeave={handleMouseUp}
             className={`w-full lg:w-3/4 bg-black flex items-center justify-center relative group shrink-0 overflow-hidden lg:rounded-l-lg flex-1 min-h-0`}
             style={{ touchAction: 'none' }}
@@ -674,6 +672,7 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
               <img 
                 key={activePhoto.id} ref={imgRef} src={activePhoto.url} alt={activePhoto.title} crossOrigin="anonymous" 
                 onClick={handleImageClick}
+                draggable={false} // CRITICAL FIX: Disable native drag to allow touch pan/zoom on blobs
                 className={`max-w-full max-h-full object-contain pointer-events-auto ${exitingPhoto ? (direction === 'right' ? 'anim-slide-in-right' : 'anim-slide-in-left') : ''} ${isPickerActive ? 'cursor-crosshair' : (zoomLevel > 1 || cropModeActive ? (isDragging ? 'cursor-grabbing' : 'cursor-grab') : 'default')}`}
                 style={{ transform: viewMode === 'image-edit' ? `rotate(${editRotation}deg) scaleX(${editFlipX})` : undefined, touchAction: 'none', transition: isDragging || cropModeActive ? 'none' : 'transform 0.3s ease' }}
               />

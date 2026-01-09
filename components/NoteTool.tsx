@@ -285,7 +285,7 @@ export const NoteTool: React.FC = () => {
         }
     } else {
         // Insert new checkbox at root (fallback)
-        const html = '<div class="todo-item" style="display: flex; align-items: center;"><input type="checkbox" style="margin-right: 8px;" /> &nbsp;</div>';
+        const html = '<div class="todo-item" style="display: flex; align-items: center;"><input type="checkbox" style="margin-right: 8px;" /></div>';
         document.execCommand('insertHTML', false, html);
     }
     
@@ -313,12 +313,20 @@ export const NoteTool: React.FC = () => {
       if (todoItem) {
         e.preventDefault(); 
         
-        // Create new checkbox line
+        // Create new checkbox line with NO extra whitespace
         const newRow = document.createElement('div');
         newRow.className = 'todo-item';
         newRow.style.display = 'flex';
         newRow.style.alignItems = 'center';
-        newRow.innerHTML = '<input type="checkbox" style="margin-right: 8px;" /> &nbsp;';
+        
+        const checkbox = document.createElement('input');
+        checkbox.type = 'checkbox';
+        checkbox.style.marginRight = '8px';
+        newRow.appendChild(checkbox);
+        
+        // Ensure valid caret position by appending a zero-width space or break if needed,
+        // but user specifically asked to remove "space", so we append nothing extra if possible
+        // or a <br> if it collapses.
         
         if (todoItem.nextSibling) {
             todoItem.parentNode?.insertBefore(newRow, todoItem.nextSibling);
@@ -327,10 +335,41 @@ export const NoteTool: React.FC = () => {
         }
 
         const newRange = document.createRange();
+        // Select inside the new row
         newRange.selectNodeContents(newRow);
+        // Collapse to end (after the input)
         newRange.collapse(false);
         selection.removeAllRanges();
         selection.addRange(newRange);
+      }
+    }
+    
+    // Backspace: Delete empty checkbox line and convert to normal line
+    if (e.key === 'Backspace') {
+      const selection = window.getSelection();
+      if (!selection || !selection.rangeCount || !selection.isCollapsed) return;
+
+      const range = selection.getRangeAt(0);
+      let node = range.commonAncestorContainer;
+      if (node.nodeType === 3) node = node.parentNode!;
+      
+      const todoItem = (node as HTMLElement).closest('.todo-item');
+      // If we are in a todo item and the content is empty (ignoring the checkbox input itself)
+      if (todoItem && (todoItem as HTMLElement).innerText.trim() === '') {
+         // Even if offset is not 0 (e.g. if there is a phantom space), we treat it as empty
+         e.preventDefault();
+         
+         // Convert to normal div
+         const newDiv = document.createElement('div');
+         newDiv.innerHTML = '<br>'; // Placeholder for empty line height
+         todoItem.replaceWith(newDiv);
+         
+         // Place cursor inside new div
+         const newRange = document.createRange();
+         newRange.selectNodeContents(newDiv);
+         newRange.collapse(true);
+         selection.removeAllRanges();
+         selection.addRange(newRange);
       }
     }
   };
