@@ -294,6 +294,8 @@ const App: React.FC = () => {
   const [isBatchTagOpen, setIsBatchTagOpen] = useState(false);
   const [batchTagInput, setBatchTagInput] = useState('');
   const [batchSelectedTags, setBatchSelectedTags] = useState<Set<string>>(new Set());
+  const [isBatchRenameOpen, setIsBatchRenameOpen] = useState(false);
+  const [batchRenameTemplate, setBatchRenameTemplate] = useState('Photo-{n}');
 
 
   // Delete Confirmation States
@@ -428,6 +430,10 @@ const App: React.FC = () => {
         setIsBatchTagOpen(false);
         return;
       }
+      if (isBatchRenameOpen && modalKey !== 'batch-rename') {
+        setIsBatchRenameOpen(false);
+        return;
+      }
 
       // 3. Menus & Settings
       if (isUploadMenuOpen && modalKey !== 'upload') {
@@ -461,7 +467,7 @@ const App: React.FC = () => {
 
     window.addEventListener('popstate', handlePopState);
     return () => window.removeEventListener('popstate', handlePopState);
-  }, [selectedPhoto, isSettingsOpen, isSidebarOpen, isSelectionMode, isUploadMenuOpen, isBatchMoveOpen, isBatchTagOpen, isSearchFocused]);
+  }, [selectedPhoto, isSettingsOpen, isSidebarOpen, isSelectionMode, isUploadMenuOpen, isBatchMoveOpen, isBatchTagOpen, isBatchRenameOpen, isSearchFocused]);
 
 
   useEffect(() => {
@@ -752,6 +758,39 @@ const App: React.FC = () => {
     setIsSelectionMode(false);
   };
 
+  // -- Batch Rename Logic --
+  const handleBatchRename = () => {
+      if (selectedIds.size === 0) return;
+      setBatchRenameTemplate('Image-{n}');
+      openModal('batch-rename', () => setIsBatchRenameOpen(true));
+  };
+
+  const confirmBatchRename = () => {
+      // Extract selected photos respecting the current view order
+      const selectedSet = selectedIds;
+      const orderedSelectedPhotos = filteredPhotos.filter(p => selectedSet.has(p.id));
+      
+      let counter = 1;
+      const updates = new Map<string, string>();
+      
+      orderedSelectedPhotos.forEach(p => {
+          const newTitle = batchRenameTemplate.replace('{n}', counter.toString().padStart(2, '0'));
+          updates.set(p.id, newTitle);
+          counter++;
+      });
+
+      setPhotos(prev => prev.map(p => {
+          if (updates.has(p.id)) {
+              return { ...p, title: updates.get(p.id)! };
+          }
+          return p;
+      }));
+
+      closeModal();
+      setSelectedIds(new Set());
+      setIsSelectionMode(false);
+  };
+
   const toggleBatchTagSelection = (tag: string) => {
       const newSet = new Set(batchSelectedTags);
       if (newSet.has(tag)) newSet.delete(tag);
@@ -1010,7 +1049,7 @@ const App: React.FC = () => {
                             openModal('selection', () => setIsSelectionMode(true));
                         }
                      }}
-                     className={`p-2 rounded-full transition-all ${isSelectionMode ? 'bg-black text-white' : 'text-slate-500 hover:bg-slate-100'}`}
+                     className={`p-2 rounded-full transition-all ${isSelectionMode ? getButtonColor() : 'text-slate-500 hover:bg-slate-100'}`}
                      title="批量选择"
                    >
                      <CheckSquare size={20} />
@@ -1093,7 +1132,7 @@ const App: React.FC = () => {
             )}
 
             {isSelectionMode && (
-              <div className="sticky top-0 z-20 mb-4 bg-slate-900 text-white p-3 shadow-md flex justify-between items-center rounded-none animate-in slide-in-from-top-2">
+              <div className={`sticky top-0 z-20 mb-4 text-white p-3 shadow-md flex justify-between items-center rounded-none animate-in slide-in-from-top-2 ${themeColor === 'zinc' ? 'bg-slate-900' : `bg-${themeColor}-600`}`}>
                  <div className="flex items-center gap-4">
                     <span className="font-bold text-sm ml-2">已选 {selectedIds.size} 项</span>
                     <button onClick={handleSelectAll} className="text-xs border border-white/30 px-2 py-1 hover:bg-white/10 rounded-sm">
@@ -1103,6 +1142,7 @@ const App: React.FC = () => {
                  <div className="flex gap-2">
                     <button onClick={handleBatchMove} disabled={selectedIds.size === 0} className="p-2 hover:bg-white/20 rounded-sm" title="移动"><Folder size={18}/></button>
                     <button onClick={handleBatchTag} disabled={selectedIds.size === 0} className="p-2 hover:bg-white/20 rounded-sm" title="标签"><Tag size={18}/></button>
+                    <button onClick={handleBatchRename} disabled={selectedIds.size === 0} className="p-2 hover:bg-white/20 rounded-sm" title="重命名"><Edit2 size={18}/></button>
                     <button onClick={handleBatchDelete} disabled={selectedIds.size === 0} className="p-2 hover:bg-red-500/50 rounded-sm text-red-300" title="删除">
                        {batchDeleteConfirm ? '确认?' : <Trash2 size={18}/>}
                     </button>
@@ -1130,7 +1170,7 @@ const App: React.FC = () => {
                           key={photo.id}
                           className={`
                             group relative aspect-square bg-slate-200 overflow-hidden cursor-pointer shadow-sm hover:shadow-md transition-all duration-300
-                            ${isSelectionMode && selectedIds.has(photo.id) ? 'ring-4 ring-slate-900 scale-95' : ''}
+                            ${isSelectionMode && selectedIds.has(photo.id) ? `ring-4 scale-95 ${themeColor === 'zinc' ? 'ring-slate-900' : `ring-${themeColor}-600`}` : ''}
                             ${!isSelectionMode && 'hover:scale-[1.02]'}
                           `}
                           onClick={() => handleGridItemClick(photo)}
@@ -1166,7 +1206,7 @@ const App: React.FC = () => {
                           </div>
 
                           {isSelectionMode && (
-                             <div className={`absolute top-2 right-2 w-6 h-6 rounded-full border-2 border-white flex items-center justify-center transition-colors ${selectedIds.has(photo.id) ? 'bg-slate-900 border-slate-900' : 'bg-black/30'}`}>
+                             <div className={`absolute top-2 right-2 w-6 h-6 rounded-full border-2 border-white flex items-center justify-center transition-colors ${selectedIds.has(photo.id) ? (themeColor === 'zinc' ? 'bg-slate-900 border-slate-900' : `bg-${themeColor}-600 border-${themeColor}-600`) : 'bg-black/30'}`}>
                                 {selectedIds.has(photo.id) && <Check size={14} className="text-white" />}
                              </div>
                           )}
@@ -1281,7 +1321,7 @@ const App: React.FC = () => {
                                     className={`
                                         flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold uppercase tracking-wide border transition-all rounded-none
                                         ${isSelected 
-                                            ? 'bg-slate-900 text-white border-slate-900' 
+                                            ? (themeColor === 'zinc' ? 'bg-slate-900 text-white border-slate-900' : `bg-${themeColor}-600 text-white border-${themeColor}-600`)
                                             : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'}
                                     `}
                                 >
@@ -1296,11 +1336,43 @@ const App: React.FC = () => {
 
                 <button 
                     onClick={confirmBatchTag}
-                    className="w-full bg-slate-900 text-white py-3 text-sm font-bold uppercase tracking-wider hover:bg-slate-800 transition-colors rounded-none"
+                    className={`w-full text-white py-3 text-sm font-bold uppercase tracking-wider transition-colors rounded-none ${getButtonColor()}`}
                 >
                     保存 ({batchTagInput.split(/[,，]/).filter(Boolean).length + batchSelectedTags.size} 个)
                 </button>
              </div>
+        </div>
+      )}
+
+      {isBatchRenameOpen && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/60 backdrop-blur-sm animate-in fade-in" onClick={closeModal}>
+            <div className="bg-white w-full max-w-md p-6 m-4 shadow-2xl rounded-none animate-in zoom-in-95 duration-200" onClick={e => e.stopPropagation()}>
+                 <div className="flex justify-between items-center mb-6">
+                    <h3 className="text-lg font-black text-slate-900 uppercase tracking-tight">批量重命名</h3>
+                    <button onClick={closeModal} className="text-slate-400 hover:text-slate-900"><X size={20}/></button>
+                </div>
+                
+                <div className="mb-6">
+                    <label className="text-xs font-bold text-slate-400 uppercase tracking-widest block mb-2">命名模版 (使用 {"{n}"} 代表序号)</label>
+                    <input 
+                        type="text" 
+                        value={batchRenameTemplate}
+                        onChange={(e) => setBatchRenameTemplate(e.target.value)}
+                        placeholder="例如: 旅行-{n}"
+                        className="w-full border-b-2 border-slate-200 py-2 text-sm font-medium focus:border-slate-900 outline-none bg-transparent"
+                    />
+                     <p className="text-[10px] text-slate-400 mt-2">
+                        预览: {batchRenameTemplate.replace('{n}', '01')}, {batchRenameTemplate.replace('{n}', '02')}...
+                    </p>
+                </div>
+
+                <button 
+                    onClick={confirmBatchRename}
+                    className={`w-full text-white py-3 text-sm font-bold uppercase tracking-wider transition-colors rounded-none ${getButtonColor()}`}
+                >
+                    重命名 {selectedIds.size} 张照片
+                </button>
+            </div>
         </div>
       )}
 
