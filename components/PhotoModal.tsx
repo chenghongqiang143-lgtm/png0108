@@ -52,13 +52,6 @@ const rgbToHsv = (r: number, g: number, b: number) => {
   };
 };
 
-const getDistance = (touches: React.TouchList) => {
-  return Math.hypot(
-    touches[0].clientX - touches[1].clientX,
-    touches[0].clientY - touches[1].clientY
-  );
-};
-
 export const PhotoModal: React.FC<PhotoModalProps> = ({
   photo,
   categories,
@@ -104,12 +97,8 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [isDragging, setIsDragging] = useState(false);
   const dragStart = useRef({ x: 0, y: 0 });
-  const initialPinchDist = useRef<number | null>(null);
-  const initialZoom = useRef(1);
 
   // Swipe State
-  const touchStartX = useRef(0);
-  const touchStartY = useRef(0);
   const [swipeOffset, setSwipeOffset] = useState(0);
   const [direction, setDirection] = useState<'left' | 'right' | null>(null);
 
@@ -122,10 +111,186 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
   const [exitingPhoto, setExitingPhoto] = useState<Photo | null>(null);
   const prevPhotoIdRef = useRef<string | undefined>(photo?.id);
 
+  // --- Gesture State Management (Refs) ---
+  const gestureStateRef = useRef({
+      zoomLevel: 1,
+      pan: { x: 0, y: 0 },
+      isDragging: false,
+      swipeOffset: 0,
+      isPickerActive: false,
+      viewMode: 'view' as 'view' | 'meta-edit' | 'image-edit',
+      cropModeActive: false,
+      hasPrev: false,
+      hasNext: false
+  });
+
+  // Sync refs with state for event listeners
+  useEffect(() => {
+      gestureStateRef.current = {
+          zoomLevel,
+          pan,
+          isDragging,
+          swipeOffset,
+          isPickerActive,
+          viewMode,
+          cropModeActive,
+          hasPrev: !!hasPrev,
+          hasNext: !!hasNext
+      };
+  }, [zoomLevel, pan, isDragging, swipeOffset, isPickerActive, viewMode, cropModeActive, hasPrev, hasNext]);
+
+  // Native Gesture Handling
+  useEffect(() => {
+    if (!isOpen) return;
+    const el = imgContainerRef.current;
+    if (!el) return;
+
+    const gesture = {
+        initialDist: 0,
+        initialZoom: 1,
+        startPan: { x: 0, y: 0 },
+        startTouch: { x: 0, y: 0 },
+        isPinching: false,
+        isDragging: false
+    };
+
+    const getDistance = (touches: TouchList) => {
+        return Math.hypot(
+            touches[0].clientX - touches[1].clientX,
+            touches[0].clientY - touches[1].clientY
+        );
+    };
+
+    const handleTouchStart = (e: TouchEvent) => {
+        const state = gestureStateRef.current;
+        if (state.isPickerActive) {
+            extractColor(e.touches[0].clientX, e.touches[0].clientY);
+            return;
+        }
+
+        if (e.touches.length === 2) {
+            gesture.isPinching = true;
+            gesture.initialDist = getDistance(e.touches);
+            gesture.initialZoom = state.zoomLevel;
+            // Disable transition immediately
+            setIsDragging(true); 
+        } else if (e.touches.length === 1) {
+            gesture.isDragging = true;
+            gesture.startTouch = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+            gesture.startPan = { ...state.pan };
+            // Note: We set isDragging(true) via state, which might have a slight delay for render,
+            // but we track gesture.isDragging immediately for logic.
+            setIsDragging(true);
+        }
+    };
+
+    const handleTouchMove = (e: TouchEvent) => {
+        const state = gestureStateRef.current;
+        if (state.isPickerActive) {
+            e.preventDefault();
+            extractColor(e.touches[0].clientX, e.touches[0].clientY);
+            return;
+        }
+
+        if (e.touches.length === 2 && gesture.isPinching) {
+            e.preventDefault(); // Stop browser zoom
+            const dist = getDistance(e.touches);
+            if (dist > 0 && gesture.initialDist > 0) {
+                const scale = dist / gesture.initialDist;
+                const newZoom = Math.min(Math.max(gesture.initialZoom * scale, 0.5), 5);
+                setZoomLevel(newZoom);
+            }
+        } else if (e.touches.length === 1 && gesture.isDragging) {
+            const dx = e.touches[0].clientX - gesture.startTouch.x;
+            const dy = e.touches[0].clientY - gesture.startTouch.y;
+
+            if (state.zoomLevel > 1 || state.cropModeActive) {
+                e.preventDefault(); // Stop browser scroll
+                setPan({
+                    x: gesture.startPan.x + dx,
+                    y: gesture.startPan.y + dy
+                });
+            } else if (state.viewMode === 'view') {
+                // Swipe Logic
+                if (Math.abs(dx) > Math.abs(dy) && Math.abs(dx) > 10) {
+                     e.preventDefault(); // Stop horizontal scroll
+                     setSwipeOffset(dx);
+                }
+            }
+        }
+    };
+
+    const handleTouchEnd = (e: TouchEvent) => {
+        const state = gestureStateRef.current;
+        
+        if (state.isPickerActive) return;
+
+        if (e.touches.length < 2) {
+            gesture.isPinching = false;
+        }
+
+        if (e.touches.length === 0) {
+            gesture.isDragging = false;
+            setIsDragging(false);
+
+            // Handle Swipe Actions or Reset
+            if (state.zoomLevel <= 1 && !state.cropModeActive) {
+                setZoomLevel(1); 
+                setPan({ x: 0, y: 0 });
+
+                if (state.viewMode === 'view') {
+                    if (Math.abs(state.swipeOffset) > 80) {
+                         if (state.swipeOffset > 0 && state.hasPrev) { 
+                             setDirection('left'); 
+                             if (onPrev) onPrev();
+                         } else if (state.swipeOffset < 0 && state.hasNext) { 
+                             setDirection('right'); 
+                             if (onNext) onNext();
+                         } else {
+                             setSwipeOffset(0);
+                         }
+                    } else {
+                        setSwipeOffset(0);
+                        // Tap / Swipe Down detection
+                        const dy = e.changedTouches[0].clientY - gesture.startTouch.y;
+                        const dx = e.changedTouches[0].clientX - gesture.startTouch.x;
+                        
+                        // If it was a tap (very little movement)
+                        if (Math.abs(dx) < 10 && Math.abs(dy) < 10) {
+                           // This is handled by onClick usually, but we can do swipe down here
+                        }
+                        
+                        // Swipe down to close
+                        if (Math.abs(state.swipeOffset) < 10 && dy > 60 && Math.abs(dx) < 30) {
+                            onClose();
+                        } else if (Math.abs(state.swipeOffset) < 10 && dy < -60 && Math.abs(dx) < 30) {
+                            setShowMobileInfo(true);
+                        }
+                    }
+                }
+            } else if (state.zoomLevel < 1) {
+                // Reset elastic zoom out
+                setZoomLevel(1);
+                setPan({ x: 0, y: 0 });
+            }
+        }
+    };
+
+    el.addEventListener('touchstart', handleTouchStart, { passive: false });
+    el.addEventListener('touchmove', handleTouchMove, { passive: false });
+    el.addEventListener('touchend', handleTouchEnd);
+
+    return () => {
+        el.removeEventListener('touchstart', handleTouchStart);
+        el.removeEventListener('touchmove', handleTouchMove);
+        el.removeEventListener('touchend', handleTouchEnd);
+    };
+
+  }, [isOpen]); // Run when open state changes
+
   useEffect(() => {
     if (photo) {
       // Only reset local edit state if the PHOTO ID changes.
-      // We do NOT want to reset if the photo object updates due to a tag/category change.
       if (photo.id !== prevPhotoIdRef.current) {
           setEditedTitle(photo.title);
           setEditedDesc(photo.description);
@@ -259,16 +424,19 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
             ctx.drawImage(img, -img.naturalWidth / 2, -img.naturalHeight / 2);
             
         } else {
-            // Standard Edit
-            const isRotated90 = Math.abs(editRotation) % 180 === 90;
+            // Arbitrary Rotation Logic
+            const rads = (editRotation * Math.PI) / 180;
+            const c = Math.cos(rads);
+            const s = Math.sin(rads);
             const originalWidth = img.naturalWidth;
             const originalHeight = img.naturalHeight;
 
-            canvas.width = isRotated90 ? originalHeight : originalWidth;
-            canvas.height = isRotated90 ? originalWidth : originalHeight;
+            // Calculate new bounding box dimensions
+            canvas.width = Math.abs(originalWidth * c) + Math.abs(originalHeight * s);
+            canvas.height = Math.abs(originalWidth * s) + Math.abs(originalHeight * c);
 
             ctx.translate(canvas.width / 2, canvas.height / 2);
-            ctx.rotate((editRotation * Math.PI) / 180);
+            ctx.rotate(rads);
             ctx.scale(editFlipX, 1);
             ctx.drawImage(img, -originalWidth / 2, -originalHeight / 2);
         }
@@ -351,75 +519,7 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
     } catch (e) { console.error("Color pick failed", e); }
   };
 
-  // Touch & Mouse Event Handlers
-  const handleTouchStart = (e: React.TouchEvent) => {
-    if (isPickerActive) {
-        extractColor(e.touches[0].clientX, e.touches[0].clientY);
-        return;
-    }
-    if (e.touches.length === 2) {
-      initialPinchDist.current = getDistance(e.touches);
-      initialZoom.current = zoomLevel;
-    } else if (e.touches.length === 1) {
-      touchStartX.current = e.touches[0].clientX;
-      touchStartY.current = e.touches[0].clientY;
-      setIsDragging(true);
-      dragStart.current = { x: e.touches[0].clientX - pan.x, y: e.touches[0].clientY - pan.y };
-    }
-  };
-
-  const handleTouchMove = (e: React.TouchEvent) => {
-    if (isPickerActive) {
-        extractColor(e.touches[0].clientX, e.touches[0].clientY);
-        e.preventDefault(); 
-        return;
-    }
-    if (e.touches.length === 2 && initialPinchDist.current) {
-       const dist = getDistance(e.touches);
-       const scale = dist / initialPinchDist.current;
-       setZoomLevel(Math.min(Math.max(initialZoom.current * scale, 0.5), 5));
-       e.preventDefault();
-    } else if (e.touches.length === 1 && isDragging) {
-       if (zoomLevel > 1 || cropModeActive) {
-           setPan({
-             x: e.touches[0].clientX - dragStart.current.x,
-             y: e.touches[0].clientY - dragStart.current.y
-           });
-       } else if (viewMode === 'view') {
-           const deltaX = e.touches[0].clientX - touchStartX.current;
-           const deltaY = e.touches[0].clientY - touchStartY.current;
-           if (Math.abs(deltaX) > Math.abs(deltaY) && Math.abs(deltaX) > 10) {
-               setSwipeOffset(deltaX);
-               e.preventDefault();
-           }
-       }
-    }
-  };
-
-  const handleTouchEnd = (e: React.TouchEvent) => {
-    if (isPickerActive) return;
-    initialPinchDist.current = null;
-    setIsDragging(false);
-    if (viewMode === 'view' && zoomLevel === 1) {
-        if (Math.abs(swipeOffset) > 80) {
-             if (swipeOffset > 0 && hasPrev && onPrev) { setDirection('left'); onPrev(); }
-             else if (swipeOffset < 0 && hasNext && onNext) { setDirection('right'); onNext(); }
-             else setSwipeOffset(0); 
-        } else setSwipeOffset(0); 
-        
-        if (Math.abs(swipeOffset) < 10 && e.changedTouches.length === 1) {
-             const deltaY = e.changedTouches[0].clientY - touchStartY.current;
-             const deltaX = e.changedTouches[0].clientX - touchStartX.current;
-             if (Math.abs(deltaY) > 60 && Math.abs(deltaX) < 30) {
-                if (deltaY > 0) onClose();
-                else setShowMobileInfo(true);
-            }
-        }
-    }
-    if (zoomLevel < 0.7 && viewMode === 'view') onClose();
-    else if (zoomLevel < 1 && !cropModeActive) { setZoomLevel(1); setPan({ x: 0, y: 0 }); }
-  };
-
+  // Mouse Event Handlers (Desktop)
   const handleMouseDown = (e: React.MouseEvent) => {
     if (isPickerActive) { extractColor(e.clientX, e.clientY); return; }
     if (zoomLevel <= 1 && viewMode === 'view' && !cropModeActive) return; 
@@ -464,14 +564,14 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
         {/* IMAGE SECTION */}
         <div 
             ref={imgContainerRef}
-            onTouchStart={handleTouchStart} onTouchMove={handleTouchMove} onTouchEnd={handleTouchEnd}
+            // Removed React Touch Handlers in favor of native listeners in useEffect
             onMouseDown={handleMouseDown} onMouseMove={handleMouseMove} onMouseUp={handleMouseUp} onMouseLeave={handleMouseUp}
             className={`w-full lg:w-3/4 bg-black flex items-center justify-center relative group shrink-0 overflow-hidden lg:rounded-l-lg flex-1 min-h-0`}
             style={{ touchAction: 'none' }}
         >
           {/* Mobile Top Bar */}
           <div className={`absolute top-6 inset-x-0 p-4 z-30 flex justify-between items-start lg:hidden pt-safe transition-opacity duration-300 ${showMobileControls ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}>
-              <button onClick={onClose} className="p-2.5 text-white/90 bg-black/20 backdrop-blur-md rounded-full active:bg-black/40">
+              <button onClick={onClose} className="p-2.5 text-white bg-white/10 border border-white/10 backdrop-blur-md rounded-full active:bg-white/20 shadow-sm">
                   <ChevronLeft size={24} />
               </button>
               {viewMode === 'image-edit' && (
@@ -496,7 +596,6 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
                      <Crop size={24} strokeWidth={1.5} />
                      <span className="text-[10px] font-medium opacity-80">编辑</span>
                  </button>
-                 {/* Removed Remark Button from Mobile Bottom Bar */}
                  <button onClick={handleDeleteClick} className={`p-4 flex flex-col items-center gap-1 active:scale-95 transition-transform ${isDeleteConfirm ? 'text-red-500' : 'text-white/90'}`}>
                      <Trash2 size={24} strokeWidth={1.5} />
                      <span className="text-[10px] font-medium opacity-80">{isDeleteConfirm ? '确认' : '删除'}</span>
@@ -507,10 +606,24 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
           {/* Edit Mode Toolbar (Overlay) */}
           {viewMode === 'image-edit' && (
               <div className="absolute bottom-0 inset-x-0 z-40 bg-black/80 backdrop-blur-md border-t border-white/10 pb-safe animate-slide-in-from-bottom-4">
+                  {/* Rotation Slider */}
+                  <div className="px-6 py-2 flex items-center gap-4">
+                      <span className="text-[10px] text-gray-400 font-bold w-8 text-right">{Math.round(editRotation)}°</span>
+                      <input 
+                        type="range" 
+                        min="-180" 
+                        max="180" 
+                        step="1"
+                        value={editRotation}
+                        onChange={(e) => setEditRotation(Number(e.target.value))}
+                        className="w-full h-1 bg-gray-600 rounded-lg appearance-none cursor-pointer accent-indigo-500"
+                      />
+                  </div>
+                  
                   <div className="flex items-center justify-between px-6 py-4 overflow-x-auto no-scrollbar gap-6">
-                      <button onClick={() => setEditRotation(r => r - 90)} className="flex flex-col items-center gap-1 text-white hover:text-indigo-400 min-w-[3rem]">
+                      <button onClick={() => setEditRotation(r => { const n = r - 90; return n < -180 ? 180 : n; })} className="flex flex-col items-center gap-1 text-white hover:text-indigo-400 min-w-[3rem]">
                           <RotateCw size={24} className="-scale-x-100" />
-                          <span className="text-[10px]">旋转</span>
+                          <span className="text-[10px]">-90°</span>
                       </button>
                       <button onClick={() => setEditFlipX(f => f * -1)} className="flex flex-col items-center gap-1 text-white hover:text-indigo-400 min-w-[3rem]">
                           <FlipHorizontal size={24} />
@@ -601,7 +714,7 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
           )}
 
           {/* Nav Arrows */}
-          {viewMode === 'view' && (
+          {viewMode === 'view' && zoomLevel <= 1 && (
               <>
                 <div className="absolute inset-y-0 left-0 flex items-center px-2 pointer-events-none z-40">
                     {hasPrev ? <button onClick={(e) => { e.stopPropagation(); setDirection('left'); onPrev?.(); }} className="pointer-events-auto p-2 rounded-full bg-black/10 hover:bg-black/40 text-white/50 hover:text-white transition-all backdrop-blur-[2px]"><ChevronLeft size={32} /></button> : <div></div>}
