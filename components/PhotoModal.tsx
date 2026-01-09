@@ -101,6 +101,8 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
   // Swipe State
   const touchStartX = useRef(0);
   const touchStartY = useRef(0);
+  const [swipeOffset, setSwipeOffset] = useState(0);
+  const [direction, setDirection] = useState<'left' | 'right' | null>(null);
 
   // Mobile View State
   const [showMobileInfo, setShowMobileInfo] = useState(false);
@@ -122,6 +124,7 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
       setPickedColor(null);
       setZoomLevel(1); 
       setPan({ x: 0, y: 0 }); 
+      setSwipeOffset(0);
       setShowMobileInfo(initialEditMode); // Auto show info if starting in edit mode
       setShowMobileControls(true);
     }
@@ -130,8 +133,14 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
         if (!isOpen) return;
-        if (e.key === 'ArrowLeft' && hasPrev && onPrev && !isEditing) onPrev();
-        if (e.key === 'ArrowRight' && hasNext && onNext && !isEditing) onNext();
+        if (e.key === 'ArrowLeft' && hasPrev && onPrev && !isEditing) {
+            setDirection('left');
+            onPrev();
+        }
+        if (e.key === 'ArrowRight' && hasNext && onNext && !isEditing) {
+            setDirection('right');
+            onNext();
+        }
         if (e.key === 'Escape') onClose();
     };
     window.addEventListener('keydown', handleKeyDown);
@@ -262,12 +271,24 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
        const scale = dist / initialPinchDist.current;
        setZoomLevel(Math.min(Math.max(initialZoom.current * scale, 0.5), 5));
        e.preventDefault();
-    } else if (e.touches.length === 1 && isDragging && zoomLevel > 1) {
-       // Panning (only if zoomed in)
-       setPan({
-         x: e.touches[0].clientX - dragStart.current.x,
-         y: e.touches[0].clientY - dragStart.current.y
-       });
+    } else if (e.touches.length === 1 && isDragging) {
+       // Panning or Swiping
+       if (zoomLevel > 1) {
+           setPan({
+             x: e.touches[0].clientX - dragStart.current.x,
+             y: e.touches[0].clientY - dragStart.current.y
+           });
+       } else {
+           // Zoom Level 1: Handle Swipe Logic
+           const deltaX = e.touches[0].clientX - touchStartX.current;
+           const deltaY = e.touches[0].clientY - touchStartY.current;
+           
+           // If horizontal movement dominates, track swipe offset for nav
+           if (Math.abs(deltaX) > Math.abs(deltaY) && Math.abs(deltaX) > 10) {
+               setSwipeOffset(deltaX);
+               e.preventDefault();
+           }
+       }
     }
   };
 
@@ -276,24 +297,32 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
     setIsDragging(false);
 
     // Swipe Gesture Check (Only when not zoomed in)
-    if (zoomLevel === 1 && e.changedTouches.length === 1) {
-        const deltaX = e.changedTouches[0].clientX - touchStartX.current;
-        const deltaY = e.changedTouches[0].clientY - touchStartY.current;
-        
-        // Horizontal swipe (Nav)
-        if (Math.abs(deltaX) > 50 && Math.abs(deltaY) < 30) {
-            if (deltaX > 0 && hasPrev && onPrev) onPrev(); 
-            if (deltaX < 0 && hasNext && onNext) onNext(); 
+    if (zoomLevel === 1) {
+        // Navigation Swipe
+        if (Math.abs(swipeOffset) > 80) {
+             if (swipeOffset > 0 && hasPrev && onPrev) {
+                 setDirection('left');
+                 onPrev();
+             } else if (swipeOffset < 0 && hasNext && onNext) {
+                 setDirection('right');
+                 onNext();
+             } else {
+                 setSwipeOffset(0); // Snap back if no prev/next
+             }
+        } else {
+             setSwipeOffset(0); // Snap back if threshold not met
         }
         
-        // Vertical swipe (Close / Controls)
-        if (Math.abs(deltaY) > 60 && Math.abs(deltaX) < 30) {
-            if (deltaY > 0) {
-                // Swipe Down: Close modal (like standard gallery apps)
-                onClose();
-            } else {
-                // Swipe Up: Show Info
-                setShowMobileInfo(true);
+        // Vertical Swipe (Close / Controls) - Only if not swiping horizontally
+        if (Math.abs(swipeOffset) < 10 && e.changedTouches.length === 1) {
+             const deltaY = e.changedTouches[0].clientY - touchStartY.current;
+             const deltaX = e.changedTouches[0].clientX - touchStartX.current;
+             if (Math.abs(deltaY) > 60 && Math.abs(deltaX) < 30) {
+                if (deltaY > 0) {
+                    onClose();
+                } else {
+                    setShowMobileInfo(true);
+                }
             }
         }
     }
@@ -373,7 +402,7 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
           
           {/* Mobile Top Bar */}
           <div className={`absolute top-0 inset-x-0 p-4 z-30 flex justify-between items-start md:hidden pt-safe transition-opacity duration-300 ${showMobileControls ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}>
-              <button onClick={onClose} className="p-2.5 text-white/90 bg-black/20 backdrop-blur-md rounded-full active:bg-black/40">
+              <button onClick={onClose} className="mt-4 p-2.5 text-white/90 bg-black/20 backdrop-blur-md rounded-full active:bg-black/40">
                   <ChevronLeft size={24} />
               </button>
               {/* Optional: Add more top controls here if needed */}
@@ -416,6 +445,7 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
           </div>
 
           <img 
+            key={photo.id}
             ref={imgRef}
             src={photo.url} 
             alt={photo.title} 
@@ -431,9 +461,15 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
             onTouchMove={handleTouchMove}
             onTouchEnd={handleTouchEnd}
             
-            className={`object-contain ${isDragging ? '' : 'transition-transform duration-200'} ${isPickerActive ? 'cursor-crosshair' : (zoomLevel > 1 ? (isDragging ? 'cursor-grabbing' : 'cursor-grab') : 'default')}`}
+            className={`
+                object-contain 
+                ${isDragging || swipeOffset !== 0 ? '' : 'transition-transform duration-200'} 
+                ${isPickerActive ? 'cursor-crosshair' : (zoomLevel > 1 ? (isDragging ? 'cursor-grabbing' : 'cursor-grab') : 'default')}
+                ${direction === 'right' ? 'animate-in slide-in-from-right duration-300' : ''}
+                ${direction === 'left' ? 'animate-in slide-in-from-left duration-300' : ''}
+            `}
             style={{ 
-              transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoomLevel})`,
+              transform: `translate(${pan.x + swipeOffset}px, ${pan.y}px) scale(${zoomLevel})`,
               maxHeight: '100%',
               maxWidth: '100%',
               touchAction: 'none'
@@ -481,14 +517,14 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
           {/* Nav Arrows */}
           <div className="absolute inset-y-0 left-0 flex items-center px-2 pointer-events-none">
               {hasPrev ? (
-                  <button onClick={(e) => { e.stopPropagation(); onPrev?.(); }} className="pointer-events-auto p-2 rounded-full bg-black/10 hover:bg-black/40 text-white/50 hover:text-white transition-all backdrop-blur-[2px]">
+                  <button onClick={(e) => { e.stopPropagation(); setDirection('left'); onPrev?.(); }} className="pointer-events-auto p-2 rounded-full bg-black/10 hover:bg-black/40 text-white/50 hover:text-white transition-all backdrop-blur-[2px]">
                       <ChevronLeft size={32} />
                   </button>
               ) : <div></div>}
           </div>
           <div className="absolute inset-y-0 right-0 flex items-center px-2 pointer-events-none">
                {hasNext ? (
-                  <button onClick={(e) => { e.stopPropagation(); onNext?.(); }} className="pointer-events-auto p-2 rounded-full bg-black/10 hover:bg-black/40 text-white/50 hover:text-white transition-all backdrop-blur-[2px]">
+                  <button onClick={(e) => { e.stopPropagation(); setDirection('right'); onNext?.(); }} className="pointer-events-auto p-2 rounded-full bg-black/10 hover:bg-black/40 text-white/50 hover:text-white transition-all backdrop-blur-[2px]">
                       <ChevronRight size={32} />
                   </button>
               ) : <div></div>}
