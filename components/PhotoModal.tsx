@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { Photo, Category } from '../types';
-import { X, Calendar, Tag, Edit2, Folder, Clock, Trash2, ChevronLeft, ChevronRight, Heart, Pipette, Copy, Bookmark, ZoomIn, ZoomOut, Maximize, Minimize, Info, Share2, MoreVertical, Crop, RotateCw, FlipHorizontal, Wand2, Check, Undo2, Image as ImageIcon, Save, Scan, ChevronDown } from 'lucide-react';
+import { X, Calendar, Tag, Edit2, Folder, Clock, Trash2, ChevronLeft, ChevronRight, Heart, Pipette, Copy, Bookmark, ZoomIn, ZoomOut, Maximize, Minimize, Info, Share2, MoreVertical, Crop, RotateCw, FlipHorizontal, Wand2, Check, Undo2, Image as ImageIcon, Save, Scan, ChevronDown, Plus } from 'lucide-react';
 import { saveImageToDB } from '../services/imageDB';
 
 interface PhotoModalProps {
@@ -81,21 +81,19 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
   const gestureLayerRef = useRef<HTMLDivElement>(null);
   const [uiZoomLevel, setUiZoomLevel] = useState(1);
   const [showMobileInfo, setShowMobileInfo] = useState(false);
-  const [showMobileControls, setShowMobileControls] = useState(true);
+  const [showControls, setShowControls] = useState(true);
 
   const physics = useRef({
     x: 0,
     y: 0,
     scale: 1,
     isDragging: false,
-    isPinching: false,
     lastTouchX: 0,
     lastTouchY: 0,
-    pinchStartDist: 0,
-    startScale: 1,
+    startScreenX: 0,
+    startScreenY: 0,
     startPanX: 0,
     startPanY: 0,
-    rafId: 0
   });
 
   const updateDOM = () => {
@@ -144,23 +142,20 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
       
       if (stageRef.current) stageRef.current.style.transition = 'none';
 
-      if (window.TouchEvent && e instanceof TouchEvent && e.touches.length === 2) {
-        p.isPinching = true;
-        p.isDragging = false;
-        p.pinchStartDist = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
-        p.startScale = p.scale;
-        p.startPanX = p.x;
-        p.startPanY = p.y;
+      const clientX = (e instanceof TouchEvent) ? e.touches[0].clientX : e.clientX;
+      const clientY = (e instanceof TouchEvent) ? e.touches[0].clientY : e.clientY;
+
+      // Disable Pinch Zoom & Multitouch (User Request: "Cancel any gestures")
+      if (window.TouchEvent && e instanceof TouchEvent && e.touches.length > 1) {
         e.preventDefault();
         return;
       }
 
       p.isDragging = true;
-      p.isPinching = false;
-      const clientX = (e instanceof TouchEvent) ? e.touches[0].clientX : e.clientX;
-      const clientY = (e instanceof TouchEvent) ? e.touches[0].clientY : e.clientY;
       p.lastTouchX = clientX;
       p.lastTouchY = clientY;
+      p.startScreenX = clientX;
+      p.startScreenY = clientY;
       p.startPanX = p.x;
       p.startPanY = p.y;
     };
@@ -168,21 +163,6 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
     const handleMove = (e: TouchEvent | MouseEvent) => {
       const p = physics.current;
       if (isPickerActive) return;
-
-      if (window.TouchEvent && e instanceof TouchEvent && e.touches.length === 2 && p.isPinching) {
-        e.preventDefault();
-        const dist = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
-        const factor = dist / p.pinchStartDist;
-        const newScale = Math.min(Math.max(p.startScale * factor, 0.8), 8);
-        
-        const scaleChange = newScale / p.scale;
-        p.scale = newScale;
-        p.x *= scaleChange;
-        p.y *= scaleChange;
-        
-        updateDOM();
-        return;
-      }
 
       if (p.isDragging) {
         const clientX = (e instanceof TouchEvent) ? e.touches[0].clientX : e.clientX;
@@ -192,18 +172,15 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
         p.lastTouchX = clientX;
         p.lastTouchY = clientY;
 
+        // PANNING: Only allow moving if zoomed in (scale > 1.05) or in crop mode
+        // Swipe navigation (scale=1) is DISABLED per request "Cancel any gestures"
         if (p.scale > 1.05 || cropModeActive) {
           e.preventDefault();
           p.x += dx;
           p.y += dy;
           updateDOM();
-        } else {
-          if (Math.abs(p.x) > 5 || Math.abs(dx) > Math.abs(dy)) {
-            e.preventDefault();
-            p.x += dx;
-            updateDOM();
-          }
-        }
+        } 
+        // If scale == 1, we do nothing. No swipe move.
       }
     };
 
@@ -211,30 +188,26 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
       const p = physics.current;
       if (isPickerActive) return;
 
-      const wasDragging = p.isDragging || p.isPinching;
-      const moveDistance = Math.hypot(p.x - p.startPanX, p.y - p.startPanY);
+      const clientX = (e instanceof TouchEvent) ? e.changedTouches[0].clientX : e.clientX;
+      const clientY = (e instanceof TouchEvent) ? e.changedTouches[0].clientY : e.clientY;
+      
+      const distScreenX = clientX - p.startScreenX;
+      const distScreenY = clientY - p.startScreenY;
+      const totalMoveDist = Math.hypot(distScreenX, distScreenY);
 
       p.isDragging = false;
-      p.isPinching = false;
 
-      if (p.scale <= 1.05 && !cropModeActive) {
-        if (Math.abs(p.x) > 100) {
-          if (p.x > 0 && hasPrev) onPrev?.();
-          else if (p.x < 0 && hasNext) onNext?.();
-          else resetPhysics();
-        } else {
-          resetPhysics();
-          // Mobile Toggle Logic: Tap (<10px move) toggles controls
-          if (moveDistance < 10 && !wasDragging) {
-             if (window.innerWidth < 1024) {
-               setShowMobileControls(prev => !prev);
-               // Also hide bottom sheet if showing controls is toggled off, or just standard toggle
-               if (showMobileControls) setShowMobileInfo(false); 
-             }
-          }
-        }
-      } else if (p.scale < 1) {
-        resetPhysics();
+      // Tap Detection
+      if (totalMoveDist < 10) {
+        // Toggle controls on tap
+        setShowControls(prev => !prev);
+        if (showControls) setShowMobileInfo(false);
+      } else {
+        // If it was a drag (pan), just clean up.
+        // If scale < 1 (which shouldn't happen without pinch, but for safety), reset
+        if (p.scale < 1) resetPhysics();
+        
+        // No Swipe Navigation logic here anymore.
       }
       setUiZoomLevel(p.scale);
     };
@@ -254,23 +227,30 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
       window.removeEventListener('mousemove', handleMove);
       window.removeEventListener('mouseup', handleEnd);
     };
-  }, [isOpen, isPickerActive, hasNext, hasPrev, cropModeActive, showMobileControls]);
+  }, [isOpen, isPickerActive, hasNext, hasPrev, cropModeActive, showControls]);
 
+  // Sync photo updates (Fix for Favorite button inconsistency)
   useEffect(() => {
-    if (photo && photo.id !== prevPhotoIdRef.current) {
-      setEditedTitle(photo.title);
-      setEditedDesc(photo.description);
-      setViewMode(initialEditMode ? 'meta-edit' : 'view');
-      setIsPickerActive(false);
-      setPickedColor(null);
-      setEditRotation(0);
-      setEditFlipX(1);
-      setCropModeActive(false);
-      setShowMobileInfo(initialEditMode);
-      setShowMobileControls(true);
-      setActivePhoto(photo);
-      prevPhotoIdRef.current = photo.id;
-      resetPhysics(false);
+    if (photo) {
+      if (photo.id !== prevPhotoIdRef.current) {
+         // New photo loaded
+         setEditedTitle(photo.title);
+         setEditedDesc(photo.description);
+         setViewMode(initialEditMode ? 'meta-edit' : 'view');
+         setIsPickerActive(false);
+         setPickedColor(null);
+         setEditRotation(0);
+         setEditFlipX(1);
+         setCropModeActive(false);
+         setShowMobileInfo(initialEditMode);
+         setShowControls(true);
+         setActivePhoto(photo);
+         prevPhotoIdRef.current = photo.id;
+         resetPhysics(false);
+      } else {
+         // Same photo updated (e.g. Favorite toggle)
+         setActivePhoto(photo);
+      }
     }
   }, [photo, initialEditMode]);
 
@@ -282,7 +262,6 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
     physics.current.scale = Math.min(physics.current.scale + 0.5, 8);
     setUiZoomLevel(physics.current.scale);
     updateDOM();
-    setShowMobileControls(true);
   };
 
   const handleZoomOut = (e: React.MouseEvent) => {
@@ -291,7 +270,6 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
     if (physics.current.scale === 1) { physics.current.x = 0; physics.current.y = 0; }
     setUiZoomLevel(physics.current.scale);
     updateDOM();
-    setShowMobileControls(true);
   };
 
   if (!isOpen || !photo || !activePhoto) return null;
@@ -360,9 +338,12 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
       ctx.drawImage(img, x, y, 1, 1, 0, 0, 1, 1);
       const pixel = ctx.getImageData(0, 0, 1, 1).data;
       const hex = "#" + ((1 << 24) + (pixel[0] << 16) + (pixel[1] << 8) + pixel[2]).toString(16).slice(1).toUpperCase();
-      if (onCollectColor) onCollectColor(hex);
+      // Remove auto-collect, let user decide
       setPickedColor(hex);
-    } catch (e) {}
+    } catch (e) {
+      console.warn("Color pick failed (likely CORS)", e);
+      // alert("无法提取颜色，请确保图片允许跨域访问");
+    }
   };
 
   return (
@@ -380,6 +361,8 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
           <div ref={stageRef} className="viewport-stage relative w-full h-full flex items-center justify-center pointer-events-none">
             <img 
               ref={imgRef} src={activePhoto.url} alt={activePhoto.title}
+              // CRITICAL FIX: Allow canvas to read image data for color picker
+              crossOrigin="anonymous"
               className="max-w-full max-h-full object-contain pointer-events-auto no-drag"
               style={{ transform: viewMode === 'image-edit' ? `rotate(${editRotation}deg) scaleX(${editFlipX})` : undefined }}
               onDragStart={e => e.preventDefault()}
@@ -399,18 +382,34 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
             onContextMenu={e => e.preventDefault()}
           />
 
-          {/* Picker Feedback */}
+          {/* Picker Feedback with Save Button - Repositioned to bottom */}
           {isPickerActive && pickedColor && (
-             <div className="absolute top-4 left-1/2 -translate-x-1/2 z-[60] flex items-center gap-2 bg-white px-4 py-2 rounded-full shadow-xl animate-in fade-in slide-in-from-top-2">
-                <div className="w-6 h-6 rounded-full border border-gray-200" style={{backgroundColor: pickedColor}}></div>
-                <span className="font-mono font-bold text-sm">{pickedColor}</span>
+             <div className="absolute bottom-28 lg:bottom-12 left-1/2 -translate-x-1/2 z-[70] flex items-center gap-4 bg-white/90 backdrop-blur-md pl-4 pr-2 py-2 rounded-full shadow-2xl animate-in fade-in slide-in-from-bottom-4 border border-white/50">
+                <div className="w-8 h-8 rounded-full border border-slate-200 shadow-inner shrink-0" style={{backgroundColor: pickedColor}}></div>
+                <div className="flex flex-col min-w-[80px]">
+                  <span className="font-mono font-black text-sm text-slate-900 leading-none">{pickedColor}</span>
+                  <span className="font-mono text-[10px] text-slate-500 leading-none mt-1">
+                    {(() => { const rgb = hexToRgb(pickedColor); return `RGB ${rgb.r},${rgb.g},${rgb.b}`; })()}
+                  </span>
+                </div>
+                <div className="h-8 w-px bg-slate-200"></div>
+                <button 
+                    onClick={(e) => { 
+                        e.stopPropagation();
+                        if (onCollectColor) onCollectColor(pickedColor);
+                    }} 
+                    className="p-2 bg-slate-900 text-white rounded-full hover:bg-slate-700 active:scale-95 transition-all shadow-sm flex items-center gap-1"
+                    title="收藏颜色"
+                >
+                    <Plus size={16} />
+                </button>
              </div>
           )}
 
-          {/* Navigation Buttons - Hidden when zoomed in on mobile to avoid clutter, visible otherwise if controls are shown */}
+          {/* Navigation Buttons - Hidden when controls are hidden */}
           {viewMode === 'view' && hasPrev && (
             <button 
-              className={`absolute left-2 top-1/2 -translate-y-1/2 p-3 rounded-full bg-black/30 hover:bg-black/50 text-white backdrop-blur-md z-50 transition-opacity duration-300 ${showMobileControls && uiZoomLevel <= 1.05 ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}
+              className={`absolute left-2 top-1/2 -translate-y-1/2 p-3 rounded-full bg-black/30 hover:bg-black/50 text-white backdrop-blur-md z-50 transition-opacity duration-300 ${showControls ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}
               onClick={(e) => { e.stopPropagation(); onPrev?.(); }}
             >
               <ChevronLeft size={32} />
@@ -418,15 +417,15 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
           )}
           {viewMode === 'view' && hasNext && (
             <button 
-              className={`absolute right-2 top-1/2 -translate-y-1/2 p-3 rounded-full bg-black/30 hover:bg-black/50 text-white backdrop-blur-md z-50 transition-opacity duration-300 ${showMobileControls && uiZoomLevel <= 1.05 ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}
+              className={`absolute right-2 top-1/2 -translate-y-1/2 p-3 rounded-full bg-black/30 hover:bg-black/50 text-white backdrop-blur-md z-50 transition-opacity duration-300 ${showControls ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}
               onClick={(e) => { e.stopPropagation(); onNext?.(); }}
             >
               <ChevronRight size={32} />
             </button>
           )}
 
-          {/* UI Controls - Mobile Top (Zoom & Close) - Force visible if zoomed in */}
-          <div className={`absolute top-6 inset-x-0 p-4 z-50 flex justify-between items-start lg:hidden pt-safe transition-opacity duration-300 ${showMobileControls || uiZoomLevel > 1.05 ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}>
+          {/* UI Controls - Mobile Top (Zoom & Close) - Always Visible per User Request "Hide buttons outside of exit/zoom" */}
+          <div className="absolute top-6 inset-x-0 p-4 z-50 flex justify-between items-start lg:hidden pt-safe">
             <button onClick={(e) => { e.stopPropagation(); onClose(); }} className="p-2.5 text-white bg-white/10 border border-white/10 backdrop-blur-md rounded-full shadow-lg active:scale-95 transition-transform"><X size={24} /></button>
             {viewMode === 'view' && (
               <div className="flex gap-4">
@@ -436,17 +435,18 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
             )}
           </div>
 
-          {/* Mobile Bottom Navigation - Hidden when zoomed in */}
+          {/* Mobile Bottom Navigation - Toggled by showControls */}
           {viewMode === 'view' && (
-            <div className={`absolute bottom-0 inset-x-0 z-50 flex justify-around items-center lg:hidden pb-safe pt-6 bg-gradient-to-t from-black/90 to-transparent transition-transform duration-300 ${showMobileControls && !showMobileInfo && uiZoomLevel <= 1.05 ? 'translate-y-0' : 'translate-y-full'}`}>
+            <div className={`absolute bottom-0 inset-x-0 z-50 flex justify-around items-center lg:hidden pb-safe pt-6 bg-gradient-to-t from-black/90 to-transparent transition-transform duration-300 ${showControls && !showMobileInfo ? 'translate-y-0' : 'translate-y-full'}`}>
               <button onClick={(e) => { e.stopPropagation(); setShowMobileInfo(true); }} className="p-4 text-white/90 flex flex-col items-center gap-1"><Info size={24} /><span className="text-[10px]">信息</span></button>
               <button onClick={(e) => { e.stopPropagation(); onUpdate({ ...activePhoto, isFavorite: !activePhoto.isFavorite }); }} className={`p-4 flex flex-col items-center gap-1 ${activePhoto.isFavorite ? 'text-red-500' : 'text-white'}`}><Heart size={24} fill={activePhoto.isFavorite ? 'currentColor' : 'none'} /><span className="text-[10px]">收藏</span></button>
+              <button onClick={(e) => { e.stopPropagation(); setIsPickerActive(!isPickerActive); }} className={`p-4 flex flex-col items-center gap-1 ${isPickerActive ? 'text-blue-400' : 'text-white/90'}`}><Pipette size={24} /><span className="text-[10px]">取色</span></button>
               <button onClick={(e) => { e.stopPropagation(); setViewMode('image-edit'); }} className="p-4 text-white/90 flex flex-col items-center gap-1"><Crop size={24} /><span className="text-[10px]">编辑</span></button>
               <button onClick={(e) => { e.stopPropagation(); isDeleteConfirm ? (onDelete(activePhoto.id), onClose()) : (setIsDeleteConfirm(true), setTimeout(() => setIsDeleteConfirm(false), 2000)); }} className={`p-4 flex flex-col items-center gap-1 ${isDeleteConfirm ? 'text-red-500' : 'text-white'}`}><Trash2 size={24} /><span className="text-[10px]">{isDeleteConfirm ? '确认' : '删除'}</span></button>
             </div>
           )}
 
-          {/* Desktop Close & Zoom */}
+          {/* Desktop Close & Zoom - Always Visible */}
           <div className="absolute top-8 right-8 z-50 hidden lg:flex gap-3">
             <div className="flex bg-black/50 backdrop-blur-md rounded-full p-1 border border-white/10">
               <button onClick={handleZoomOut} className="p-2 text-white/70 hover:text-white"><ZoomOut size={20} /></button>
@@ -478,8 +478,8 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
           )}
         </div>
 
-        {/* DETAILS PANEL */}
-        <div className={`fixed lg:relative inset-x-0 bottom-0 z-[60] lg:z-auto bg-white lg:w-1/4 flex flex-col transition-transform duration-300 lg:translate-y-0 ${showMobileInfo ? 'translate-y-0' : 'translate-y-full'}`}>
+        {/* DETAILS PANEL - Desktop Visibility Toggle */}
+        <div className={`fixed lg:relative inset-x-0 bottom-0 z-[60] lg:z-auto bg-white lg:w-1/4 flex flex-col transition-transform duration-300 ${showMobileInfo ? 'translate-y-0' : (window.innerWidth >= 1024 && showControls ? 'translate-y-0' : 'translate-y-full lg:translate-x-full lg:translate-y-0')}`}>
           <div className="lg:hidden w-full flex justify-center py-4" onClick={() => setShowMobileInfo(false)}><div className="w-12 h-1 bg-gray-200 rounded-full"></div></div>
           
           {/* DESKTOP HEADER: Tools */}
