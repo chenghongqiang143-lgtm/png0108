@@ -1,6 +1,7 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Photo, Category } from '../types';
-import { X, Calendar, Tag, Edit2, Folder, Clock, Trash2, ChevronLeft, ChevronRight, Heart, Pipette, Copy, Bookmark, ZoomIn, ZoomOut, Maximize, Minimize, Info, Share2, MoreVertical, Crop, RotateCw, FlipHorizontal, Wand2, Check, Undo2, Image as ImageIcon, Save, Scan, ChevronDown, Plus } from 'lucide-react';
+// 添加缺失的 Tag 图标导入
+import { X, Edit2, Folder, Trash2, ChevronLeft, ChevronRight, Heart, Pipette, ZoomIn, ZoomOut, Maximize, Info, Crop, RotateCw, FlipHorizontal, Save, Plus, RotateCcw, Tag } from 'lucide-react';
 import { saveImageToDB } from '../services/imageDB';
 
 interface PhotoModalProps {
@@ -54,7 +55,6 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
   const [isDeleteConfirm, setIsDeleteConfirm] = useState(false);
   const [isPickerActive, setIsPickerActive] = useState(false);
   const [pickedColor, setPickedColor] = useState<string | null>(null);
-  const [isFullscreen, setIsFullscreen] = useState(false);
   const [showMobileInfo, setShowMobileInfo] = useState(false);
   const [showControls, setShowControls] = useState(true);
 
@@ -63,126 +63,137 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
   const stageRef = useRef<HTMLDivElement>(null);
   const gestureLayerRef = useRef<HTMLDivElement>(null);
 
+  // 手势状态管理
+  const activePointers = useRef(new Map<number, { x: number, y: number }>());
   const physics = useRef({
     x: 0,
     y: 0,
     scale: 1,
+    lastDist: 0,
+    startScale: 1,
     isDragging: false,
-    lastTouchX: 0,
-    lastTouchY: 0,
-    startScreenX: 0,
-    startScreenY: 0,
+    lastX: 0,
+    lastY: 0,
+    startTime: 0
   });
 
   const updateDOM = () => {
     if (stageRef.current) {
       const { x, y, scale } = physics.current;
-      stageRef.current.style.setProperty('transform', `translate3d(${x}px, ${y}px, 0) scale(${scale})`, 'important');
+      stageRef.current.style.transform = `translate3d(${x}px, ${y}px, 0) scale(${scale})`;
     }
   };
 
   const resetPhysics = (animate = true) => {
     const p = physics.current;
-    p.x = 0;
-    p.y = 0;
-    p.scale = 1;
+    p.x = 0; p.y = 0; p.scale = 1;
     if (stageRef.current) {
-      if (animate) stageRef.current.style.transition = 'transform 0.2s cubic-bezier(0.4, 0, 0.2, 1)';
+      if (animate) stageRef.current.style.transition = 'transform 0.4s cubic-bezier(0.2, 0.8, 0.2, 1)';
       updateDOM();
-      if (animate) setTimeout(() => { if (stageRef.current) stageRef.current.style.transition = 'none'; }, 200);
+      if (animate) setTimeout(() => { if (stageRef.current) stageRef.current.style.transition = 'none'; }, 400);
     }
   };
 
-  useEffect(() => {
-    const handleFsChange = () => setIsFullscreen(!!document.fullscreenElement);
-    document.addEventListener('fullscreenchange', handleFsChange);
-    return () => document.removeEventListener('fullscreenchange', handleFsChange);
-  }, []);
-
-  const toggleFullscreen = () => {
-    if (!document.fullscreenElement) {
-        document.documentElement.requestFullscreen().catch(() => {});
-    } else {
-        if (document.exitFullscreen) document.exitFullscreen();
+  const extractColor = (clientX: number, clientY: number) => {
+    if (!imgRef.current) return;
+    const img = imgRef.current;
+    const rect = img.getBoundingClientRect();
+    if (clientX < rect.left || clientX > rect.right || clientY < rect.top || clientY > rect.bottom) return;
+    const x = (clientX - rect.left) * (img.naturalWidth / rect.width);
+    const y = (clientY - rect.top) * (img.naturalHeight / rect.height);
+    const canvas = document.createElement('canvas');
+    canvas.width = 1; canvas.height = 1;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    try {
+      ctx.drawImage(img, x, y, 1, 1, 0, 0, 1, 1);
+      const pixel = ctx.getImageData(0, 0, 1, 1).data;
+      const hex = "#" + ((1 << 24) + (pixel[0] << 16) + (pixel[1] << 8) + pixel[2]).toString(16).slice(1).toUpperCase();
+      setPickedColor(hex);
+    } catch (e) {
+      console.warn("Color pick failed", e);
     }
   };
 
-  useEffect(() => {
-    if (!isOpen) return;
-    const el = gestureLayerRef.current;
-    if (!el) return;
+  const handlePointerDown = (e: React.PointerEvent) => {
+    // 排除 UI 点击：如果是按钮或输入框，手势层不介入
+    if ((e.target as HTMLElement).closest('.ui-btn')) return;
 
-    const handleStart = (e: TouchEvent | MouseEvent) => {
-      const p = physics.current;
-      if (isPickerActive) return;
-      if (stageRef.current) stageRef.current.style.transition = 'none';
+    if (isPickerActive) {
+      extractColor(e.clientX, e.clientY);
+      return;
+    }
 
-      const clientX = (e instanceof TouchEvent) ? e.touches[0].clientX : e.clientX;
-      const clientY = (e instanceof TouchEvent) ? e.touches[0].clientY : e.clientY;
+    const p = physics.current;
+    if (stageRef.current) stageRef.current.style.transition = 'none';
 
+    activePointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+
+    if (activePointers.current.size === 1) {
       p.isDragging = true;
-      p.lastTouchX = clientX;
-      p.lastTouchY = clientY;
-      p.startScreenX = clientX;
-      p.startScreenY = clientY;
-    };
+      p.lastX = e.clientX;
+      p.lastY = e.clientY;
+      p.startTime = Date.now();
+    } else if (activePointers.current.size === 2) {
+      // 显式转换 pts 类型以修复 TS 错误
+      const pts = Array.from(activePointers.current.values()) as { x: number; y: number }[];
+      p.lastDist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+      p.startScale = p.scale;
+    }
 
-    const handleMove = (e: TouchEvent | MouseEvent) => {
-      const p = physics.current;
-      if (isPickerActive || !p.isDragging) return;
+    gestureLayerRef.current?.setPointerCapture(e.pointerId);
+  };
 
-      const clientX = (e instanceof TouchEvent) ? e.touches[0].clientX : e.clientX;
-      const clientY = (e instanceof TouchEvent) ? e.touches[0].clientY : e.clientY;
-      const dx = clientX - p.lastTouchX;
-      const dy = clientY - p.lastTouchY;
-      p.lastTouchX = clientX;
-      p.lastTouchY = clientY;
+  const handlePointerMove = (e: React.PointerEvent) => {
+    if (!activePointers.current.has(e.pointerId)) return;
+    activePointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
 
-      if (p.scale > 1.05 || cropModeActive) {
-        e.preventDefault();
+    const p = physics.current;
+
+    // 处理缩放 (2指)
+    if (activePointers.current.size === 2) {
+      // 显式转换 pts 类型以修复 TS 错误
+      const pts = Array.from(activePointers.current.values()) as { x: number; y: number }[];
+      const dist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+      const ratio = dist / p.lastDist;
+      p.scale = Math.min(Math.max(p.startScale * ratio, 0.5), 10);
+      updateDOM();
+    } 
+    // 处理拖拽 (1指，且已缩放或在编辑模式)
+    else if (activePointers.current.size === 1 && p.isDragging) {
+      const dx = e.clientX - p.lastX;
+      const dy = e.clientY - p.lastY;
+      p.lastX = e.clientX;
+      p.lastY = e.clientY;
+
+      if (p.scale > 1.01 || viewMode === 'image-edit') {
         p.x += dx;
         p.y += dy;
         updateDOM();
       }
-    };
+    }
+  };
 
-    const handleEnd = (e: TouchEvent | MouseEvent) => {
-      const p = physics.current;
-      if (isPickerActive) return;
-
-      const clientX = (e instanceof TouchEvent) ? e.changedTouches[0].clientX : e.clientX;
-      const clientY = (e instanceof TouchEvent) ? e.changedTouches[0].clientY : e.clientY;
-      
-      const distScreenX = clientX - p.startScreenX;
-      const distScreenY = clientY - p.startScreenY;
-      const totalMoveDist = Math.hypot(distScreenX, distScreenY);
-
-      p.isDragging = false;
-
-      // Tap Detection: < 5px move is a tap
-      if (totalMoveDist < 5 && viewMode === 'view') {
+  const handlePointerUp = (e: React.PointerEvent) => {
+    const p = physics.current;
+    const duration = Date.now() - p.startTime;
+    
+    // 如果是快速点按
+    if (activePointers.current.size === 1 && duration < 250) {
+      if (viewMode === 'view' && !isPickerActive) {
         setShowControls(prev => !prev);
-      } else if (p.scale < 1) {
-        resetPhysics();
       }
-    };
+    }
 
-    el.addEventListener('touchstart', handleStart, { passive: false });
-    el.addEventListener('touchmove', handleMove, { passive: false });
-    el.addEventListener('touchend', handleEnd);
-    el.addEventListener('mousedown', handleStart);
-    window.addEventListener('mousemove', handleMove);
-    window.addEventListener('mouseup', handleEnd);
-
-    return () => {
-      el.removeEventListener('touchstart', handleStart);
-      el.removeEventListener('touchmove', handleMove);
-      el.removeEventListener('touchend', handleEnd);
-      el.removeEventListener('mousedown', handleStart);
-      window.removeEventListener('mousemove', handleMove);
-      window.removeEventListener('mouseup', handleEnd);
-    };
-  }, [isOpen, isPickerActive, viewMode, cropModeActive]);
+    activePointers.current.delete(e.pointerId);
+    if (activePointers.current.size < 2) {
+      p.lastDist = 0;
+    }
+    if (activePointers.current.size === 0) {
+      p.isDragging = false;
+      if (p.scale < 1) resetPhysics();
+    }
+  };
 
   useEffect(() => {
     if (photo) {
@@ -208,19 +219,6 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
   const [activePhoto, setActivePhoto] = useState<Photo | null>(photo);
   const prevPhotoIdRef = useRef<string | undefined>(photo?.id);
 
-  const handleZoomIn = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    physics.current.scale = Math.min(physics.current.scale + 0.5, 8);
-    updateDOM();
-  };
-
-  const handleZoomOut = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    physics.current.scale = Math.max(physics.current.scale - 0.5, 1);
-    if (physics.current.scale === 1) { physics.current.x = 0; physics.current.y = 0; }
-    updateDOM();
-  };
-
   if (!isOpen || !photo || !activePhoto) return null;
 
   const handleImageSave = async () => {
@@ -231,30 +229,22 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
       const canvas = document.createElement('canvas');
       const ctx = canvas.getContext('2d');
       if (!ctx) throw new Error("Canvas support missing");
-      if (cropModeActive && imgContainerRef.current) {
-        const container = imgContainerRef.current;
-        const rect = container.getBoundingClientRect();
-        const exportScale = 2;
-        canvas.width = rect.width * exportScale;
-        canvas.height = rect.height * exportScale;
-        ctx.fillStyle = '#000';
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
-        ctx.translate(canvas.width / 2, canvas.height / 2);
-        ctx.translate(physics.current.x * exportScale, physics.current.y * exportScale);
-        ctx.scale(physics.current.scale * exportScale, physics.current.scale * exportScale);
-        ctx.rotate((editRotation * Math.PI) / 180);
-        ctx.scale(editFlipX, 1);
-        ctx.drawImage(img, -img.naturalWidth / 2, -img.naturalHeight / 2);
-      } else {
-        const rads = (editRotation * Math.PI) / 180;
-        const c = Math.abs(Math.cos(rads)), s = Math.abs(Math.sin(rads));
-        canvas.width = img.naturalWidth * c + img.naturalHeight * s;
-        canvas.height = img.naturalWidth * s + img.naturalHeight * c;
-        ctx.translate(canvas.width / 2, canvas.height / 2);
-        ctx.rotate(rads);
-        ctx.scale(editFlipX, 1);
-        ctx.drawImage(img, -img.naturalWidth / 2, -img.naturalHeight / 2);
-      }
+      
+      const rads = (editRotation * Math.PI) / 180;
+      const absCos = Math.abs(Math.cos(rads));
+      const absSin = Math.abs(Math.sin(rads));
+      
+      const targetWidth = img.naturalWidth * absCos + img.naturalHeight * absSin;
+      const targetHeight = img.naturalWidth * absSin + img.naturalHeight * absCos;
+
+      canvas.width = targetWidth;
+      canvas.height = targetHeight;
+      
+      ctx.translate(canvas.width / 2, canvas.height / 2);
+      ctx.rotate(rads);
+      ctx.scale(editFlipX, 1);
+      ctx.drawImage(img, -img.naturalWidth / 2, -img.naturalHeight / 2);
+
       canvas.toBlob(async (blob) => {
         if (blob) {
           await saveImageToDB(photo!.id, blob);
@@ -264,31 +254,10 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
           resetPhysics();
         }
         setIsProcessing(false);
-      }, 'image/jpeg', 0.9);
+      }, 'image/jpeg', 0.95);
     } catch (e) {
       setIsProcessing(false);
       alert("保存失败");
-    }
-  };
-
-  const extractColor = (clientX: number, clientY: number) => {
-    if (!imgRef.current) return;
-    const img = imgRef.current;
-    const rect = img.getBoundingClientRect();
-    if (clientX < rect.left || clientX > rect.right || clientY < rect.top || clientY > rect.bottom) return;
-    const x = (clientX - rect.left) * (img.naturalWidth / rect.width);
-    const y = (clientY - rect.top) * (img.naturalHeight / rect.height);
-    const canvas = document.createElement('canvas');
-    canvas.width = 1; canvas.height = 1;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-    try {
-      ctx.drawImage(img, x, y, 1, 1, 0, 0, 1, 1);
-      const pixel = ctx.getImageData(0, 0, 1, 1).data;
-      const hex = "#" + ((1 << 24) + (pixel[0] << 16) + (pixel[1] << 8) + pixel[2]).toString(16).slice(1).toUpperCase();
-      setPickedColor(hex);
-    } catch (e) {
-      console.warn("Color pick failed (likely CORS)", e);
     }
   };
 
@@ -297,137 +266,209 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
       <style>{`
         .viewport-stage { will-change: transform; transition: none; }
         .no-drag { -webkit-user-drag: none; user-select: none; -webkit-touch-callout: none; }
-        .immersive-hide { opacity: 0; pointer-events: none; }
+        .ui-btn { pointer-events: auto !important; cursor: pointer; }
+        .grid-line { pointer-events: none; border: 0.5px solid rgba(255,255,255,0.4); }
+        input[type="range"] { -webkit-appearance: none; background: rgba(255,255,255,0.15); border-radius: 99px; height: 6px; }
+        input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 20px; height: 20px; background: white; border-radius: 50%; cursor: pointer; box-shadow: 0 2px 6px rgba(0,0,0,0.4); border: 2px solid #000; }
       `}</style>
 
-      <div className="bg-black w-full h-full lg:h-auto lg:max-h-[90vh] lg:aspect-video lg:max-w-7xl flex flex-col lg:flex-row lg:shadow-2xl relative lg:rounded-lg overflow-hidden">
+      <div className="bg-black w-full h-full lg:h-auto lg:max-h-[90vh] lg:aspect-video lg:max-w-7xl flex flex-col lg:flex-row relative lg:rounded-lg overflow-hidden">
         
-        {/* IMAGE SECTION */}
+        {/* 图片交互核心区 */}
         <div ref={imgContainerRef} className="w-full lg:w-3/4 bg-black flex items-center justify-center relative shrink-0 overflow-hidden flex-1 min-h-0 touch-none">
           
           <div ref={stageRef} className="viewport-stage relative w-full h-full flex items-center justify-center pointer-events-none">
-            <img 
-              ref={imgRef} src={activePhoto.url} alt={activePhoto.title}
-              crossOrigin="anonymous"
-              className="max-w-full max-h-full object-contain pointer-events-auto no-drag"
-              style={{ transform: viewMode === 'image-edit' ? `rotate(${editRotation}deg) scaleX(${editFlipX})` : undefined }}
-              onDragStart={e => e.preventDefault()}
-            />
-            {cropModeActive && (
-              <div className="absolute inset-0 border-2 border-white/50 shadow-[0_0_0_9999px_rgba(0,0,0,0.5)] z-20">
-                <div className="w-full h-full grid grid-cols-3 grid-rows-3 opacity-20">
-                  {[...Array(9)].map((_, i) => <div key={i} className="border border-white"></div>)}
+            <div className="relative flex items-center justify-center" style={{ transform: `rotate(${editRotation}deg) scaleX(${editFlipX})` }}>
+              <img 
+                ref={imgRef} src={activePhoto.url} alt={activePhoto.title}
+                crossOrigin="anonymous"
+                className="max-w-full max-h-full object-contain pointer-events-auto no-drag"
+              />
+              
+              {/* 编辑模式下的裁切辅助线和阴影 */}
+              {viewMode === 'image-edit' && cropModeActive && (
+                <div className="absolute inset-0 z-20 pointer-events-none border-2 border-white/90 shadow-[0_0_0_9999px_rgba(0,0,0,0.5)]">
+                   <div className="w-full h-full grid grid-cols-3 grid-rows-3">
+                      {[...Array(9)].map((_, i) => <div key={i} className="grid-line"></div>)}
+                   </div>
                 </div>
-              </div>
-            )}
+              )}
+            </div>
           </div>
 
-          <div ref={gestureLayerRef} className={`absolute inset-0 z-40 touch-none ${isPickerActive ? 'cursor-crosshair' : 'cursor-grab active:cursor-grabbing'}`}
-            onPointerDown={e => isPickerActive && extractColor(e.clientX, e.clientY)}
-            onContextMenu={e => e.preventDefault()}
+          <div 
+            ref={gestureLayerRef} 
+            className={`absolute inset-0 z-40 touch-none ${isPickerActive ? 'cursor-crosshair' : 'cursor-grab active:cursor-grabbing'}`}
+            onPointerDown={handlePointerDown}
+            onPointerMove={handlePointerMove}
+            onPointerUp={handlePointerUp}
+            onPointerCancel={handlePointerUp}
           />
 
-          {/* Picker Feedback - Bottom position, adapts to showControls */}
+          {/* 状态栏按钮：退出、重置 */}
+          <div className={`absolute top-0 inset-x-0 p-4 z-50 flex justify-between items-start lg:hidden pt-safe transition-all duration-300 ${showControls ? 'translate-y-0 opacity-100' : '-translate-y-full opacity-0 pointer-events-none'}`}>
+            <button 
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={onClose}
+              className="ui-btn p-3 text-white bg-black/40 border border-white/20 backdrop-blur-md rounded-full shadow-lg"
+            >
+              <X size={24} />
+            </button>
+            <button 
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={resetPhysics}
+              className="ui-btn p-3 text-white bg-black/40 border border-white/20 backdrop-blur-md rounded-full shadow-lg"
+            >
+              <RotateCcw size={20} />
+            </button>
+          </div>
+
+          {/* 取色器 UI */}
           {isPickerActive && pickedColor && (
-             <div className={`absolute left-1/2 -translate-x-1/2 z-[70] flex items-center gap-4 bg-white/95 backdrop-blur-md pl-4 pr-2 py-2 rounded-full shadow-2xl transition-all duration-300 ${showControls ? 'bottom-28 lg:bottom-12' : 'bottom-8'}`}>
-                <div className="w-8 h-8 rounded-full border border-slate-200 shadow-inner shrink-0" style={{backgroundColor: pickedColor}}></div>
+             <div 
+               className={`absolute left-1/2 -translate-x-1/2 z-[70] flex items-center gap-4 bg-white/95 backdrop-blur-md pl-4 pr-2 py-2 rounded-full shadow-2xl transition-all duration-300 ${showControls ? 'bottom-28 lg:bottom-12' : 'bottom-10'}`}
+               onPointerDown={e => e.stopPropagation()}
+             >
+                <div className="w-8 h-8 rounded-full border border-slate-200 shadow-inner" style={{backgroundColor: pickedColor}}></div>
                 <div className="flex flex-col min-w-[80px]">
                   <span className="font-mono font-black text-sm text-slate-900 leading-none">{pickedColor}</span>
-                  <span className="font-mono text-[10px] text-slate-500 leading-none mt-1">
+                  <span className="font-mono text-[10px] text-slate-500 uppercase mt-1">
                     {(() => { const rgb = hexToRgb(pickedColor); return `RGB ${rgb.r},${rgb.g},${rgb.b}`; })()}
                   </span>
                 </div>
-                <div className="h-8 w-px bg-slate-200"></div>
                 <button 
-                    onClick={(e) => { e.stopPropagation(); if (onCollectColor) onCollectColor(pickedColor); }} 
-                    className="p-2 bg-slate-900 text-white rounded-full hover:bg-slate-700 active:scale-95 transition-all shadow-sm"
+                    onPointerDown={e => e.stopPropagation()}
+                    onClick={() => onCollectColor?.(pickedColor)}
+                    className="ui-btn p-2 bg-slate-900 text-white rounded-full"
                 >
                     <Plus size={16} />
                 </button>
              </div>
           )}
 
-          {/* Navigation Arrows */}
-          <button 
-            className={`absolute left-4 top-1/2 -translate-y-1/2 p-4 rounded-full bg-black/20 text-white backdrop-blur-md z-50 transition-all duration-300 ${showControls && hasPrev ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}
-            onClick={(e) => { e.stopPropagation(); onPrev?.(); }}
-          >
-            <ChevronLeft size={32} />
-          </button>
-          <button 
-            className={`absolute right-4 top-1/2 -translate-y-1/2 p-4 rounded-full bg-black/20 text-white backdrop-blur-md z-50 transition-all duration-300 ${showControls && hasNext ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}
-            onClick={(e) => { e.stopPropagation(); onNext?.(); }}
-          >
-            <ChevronRight size={32} />
-          </button>
+          {/* 左右导航 */}
+          {viewMode === 'view' && showControls && (
+            <>
+              <button 
+                onPointerDown={e => e.stopPropagation()}
+                onClick={onPrev}
+                className={`ui-btn absolute left-4 top-1/2 -translate-y-1/2 p-4 rounded-full bg-black/20 text-white backdrop-blur-md z-50 transition-all ${hasPrev ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}
+              >
+                <ChevronLeft size={32} />
+              </button>
+              <button 
+                onPointerDown={e => e.stopPropagation()}
+                onClick={onNext}
+                className={`ui-btn absolute right-4 top-1/2 -translate-y-1/2 p-4 rounded-full bg-black/20 text-white backdrop-blur-md z-50 transition-all ${hasNext ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}
+              >
+                <ChevronRight size={32} />
+              </button>
+            </>
+          )}
 
-          {/* Mobile Top Bar */}
-          <div className={`absolute top-0 inset-x-0 p-4 z-50 flex justify-between items-start lg:hidden pt-safe bg-gradient-to-b from-black/50 to-transparent transition-all duration-300 ${showControls ? 'translate-y-0 opacity-100' : '-translate-y-full opacity-0'}`}>
-            <button onClick={(e) => { e.stopPropagation(); onClose(); }} className="p-2.5 text-white bg-white/10 border border-white/10 backdrop-blur-md rounded-full shadow-lg active:scale-95 transition-transform"><X size={24} /></button>
-            <div className="flex gap-4">
-              <button onClick={handleZoomOut} className="p-2.5 text-white bg-white/10 border border-white/10 backdrop-blur-md rounded-full shadow-lg active:scale-95 transition-transform"><ZoomOut size={20} /></button>
-              <button onClick={handleZoomIn} className="p-2.5 text-white bg-white/10 border border-white/10 backdrop-blur-md rounded-full shadow-lg active:scale-95 transition-transform"><ZoomIn size={20} /></button>
+          {/* 普通底部操作栏 */}
+          <div className={`absolute bottom-0 inset-x-0 z-50 flex justify-around items-center lg:hidden pb-safe pt-10 bg-gradient-to-t from-black/90 to-transparent transition-all duration-300 ${viewMode === 'view' && showControls && !showMobileInfo ? 'translate-y-0' : 'translate-y-full opacity-0 pointer-events-none'}`}>
+            <button onPointerDown={e => e.stopPropagation()} onClick={() => setShowMobileInfo(true)} className="ui-btn p-4 text-white/90 flex flex-col items-center gap-1"><Info size={24} /><span className="text-[10px]">信息</span></button>
+            <button onPointerDown={e => e.stopPropagation()} onClick={() => onUpdate({ ...activePhoto, isFavorite: !activePhoto.isFavorite })} className={`ui-btn p-4 flex flex-col items-center gap-1 ${activePhoto.isFavorite ? 'text-red-500' : 'text-white'}`}><Heart size={24} fill={activePhoto.isFavorite ? 'currentColor' : 'none'} /><span className="text-[10px]">收藏</span></button>
+            <button onPointerDown={e => e.stopPropagation()} onClick={() => { setIsPickerActive(!isPickerActive); setPickedColor(null); }} className={`ui-btn p-4 flex flex-col items-center gap-1 ${isPickerActive ? 'text-blue-400 font-bold' : 'text-white/90'}`}><Pipette size={24} /><span className="text-[10px]">取色</span></button>
+            <button onPointerDown={e => e.stopPropagation()} onClick={() => setViewMode('image-edit')} className="ui-btn p-4 text-white/90 flex flex-col items-center gap-1"><Crop size={24} /><span className="text-[10px]">编辑</span></button>
+            <button onPointerDown={e => e.stopPropagation()} onClick={() => isDeleteConfirm ? (onDelete(activePhoto.id), onClose()) : (setIsDeleteConfirm(true), setTimeout(() => setIsDeleteConfirm(false), 2000))} className={`ui-btn p-4 flex flex-col items-center gap-1 ${isDeleteConfirm ? 'text-red-500 font-bold' : 'text-white'}`}><Trash2 size={24} /><span className="text-[10px]">{isDeleteConfirm ? '确认' : '删除'}</span></button>
+          </div>
+
+          {/* 图片编辑工具栏 */}
+          <div className={`absolute bottom-0 inset-x-0 z-[60] flex flex-col gap-6 bg-black/95 backdrop-blur-2xl border-t border-white/10 p-6 pb-safe transition-all duration-300 ${viewMode === 'image-edit' ? 'translate-y-0' : 'translate-y-full opacity-0 pointer-events-none'}`}>
+            
+            <div className="flex flex-col gap-3">
+              <div className="flex justify-between items-center text-[10px] font-black uppercase tracking-widest text-white/50">
+                <span>旋转</span>
+                <span className="text-white font-mono">{editRotation}°</span>
+              </div>
+              <input 
+                type="range" min="-180" max="180" step="1" 
+                value={editRotation} 
+                onChange={e => setEditRotation(parseInt(e.target.value))}
+                onPointerDown={e => e.stopPropagation()}
+                className="w-full ui-btn"
+              />
+            </div>
+
+            <div className="flex justify-around items-center">
+              <button onPointerDown={e => e.stopPropagation()} onClick={() => setEditRotation(prev => (Math.floor(prev/90)*90 + 90) % 360)} className="ui-btn flex flex-col items-center gap-1 text-white/70 hover:text-white"><RotateCw size={22} /><span className="text-[10px]">90°</span></button>
+              <button onPointerDown={e => e.stopPropagation()} onClick={() => setEditFlipX(prev => prev * -1)} className="ui-btn flex flex-col items-center gap-1 text-white/70 hover:text-white"><FlipHorizontal size={22} /><span className="text-[10px]">翻转</span></button>
+              <button onPointerDown={e => e.stopPropagation()} onClick={() => setCropModeActive(!cropModeActive)} className={`ui-btn flex flex-col items-center gap-1 ${cropModeActive ? 'text-blue-400' : 'text-blue-400' && 'text-white/70'}`}><Maximize size={22} /><span className="text-[10px]">裁切网格</span></button>
+            </div>
+            
+            <div className="flex gap-3">
+              <button onPointerDown={e => e.stopPropagation()} onClick={() => { setViewMode('view'); setCropModeActive(false); resetPhysics(); }} className="ui-btn flex-1 py-4 bg-white/10 text-white font-black uppercase text-xs">取消</button>
+              <button onPointerDown={e => e.stopPropagation()} onClick={handleImageSave} disabled={isProcessing} className="ui-btn flex-1 py-4 bg-white text-black font-black uppercase text-xs flex items-center justify-center gap-2">
+                {isProcessing ? <div className="w-3 h-3 border-2 border-black border-t-transparent animate-spin rounded-full"></div> : <Save size={16} />} 保存
+              </button>
             </div>
           </div>
 
-          {/* Mobile Bottom Bar */}
-          <div className={`absolute bottom-0 inset-x-0 z-50 flex justify-around items-center lg:hidden pb-safe pt-8 bg-gradient-to-t from-black/80 to-transparent transition-all duration-300 ${showControls && !showMobileInfo ? 'translate-y-0 opacity-100' : 'translate-y-full opacity-0'}`}>
-            <button onClick={(e) => { e.stopPropagation(); setShowMobileInfo(true); }} className="p-4 text-white/90 flex flex-col items-center gap-1"><Info size={24} /><span className="text-[10px]">信息</span></button>
-            <button onClick={(e) => { e.stopPropagation(); onUpdate({ ...activePhoto, isFavorite: !activePhoto.isFavorite }); }} className={`p-4 flex flex-col items-center gap-1 ${activePhoto.isFavorite ? 'text-red-500' : 'text-white'}`}><Heart size={24} fill={activePhoto.isFavorite ? 'currentColor' : 'none'} /><span className="text-[10px]">收藏</span></button>
-            <button onClick={(e) => { e.stopPropagation(); setIsPickerActive(!isPickerActive); }} className={`p-4 flex flex-col items-center gap-1 ${isPickerActive ? 'text-blue-400' : 'text-white/90'}`}><Pipette size={24} /><span className="text-[10px]">取色</span></button>
-            <button onClick={(e) => { e.stopPropagation(); setViewMode('image-edit'); }} className="p-4 text-white/90 flex flex-col items-center gap-1"><Crop size={24} /><span className="text-[10px]">编辑</span></button>
-            <button onClick={(e) => { e.stopPropagation(); isDeleteConfirm ? (onDelete(activePhoto.id), onClose()) : (setIsDeleteConfirm(true), setTimeout(() => setIsDeleteConfirm(false), 2000)); }} className={`p-4 flex flex-col items-center gap-1 ${isDeleteConfirm ? 'text-red-500' : 'text-white'}`}><Trash2 size={24} /><span className="text-[10px]">{isDeleteConfirm ? '确认' : '删除'}</span></button>
-          </div>
-
-          {/* Desktop Controls */}
-          <div className={`absolute top-8 right-8 z-50 hidden lg:flex gap-3 transition-all duration-300 ${showControls ? 'opacity-100 translate-y-0' : 'opacity-0 -translate-y-4 pointer-events-none'}`}>
-            <div className="flex bg-black/50 backdrop-blur-md rounded-full p-1 border border-white/10">
-              <button onClick={handleZoomOut} className="p-2 text-white/70 hover:text-white"><ZoomOut size={20} /></button>
-              <button onClick={handleZoomIn} className="p-2 text-white/70 hover:text-white"><ZoomIn size={20} /></button>
+          {/* 桌面端浮动控制栏 */}
+          <div className={`absolute top-8 right-8 z-50 hidden lg:flex gap-3 transition-all duration-300 ${showControls ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}>
+            <div className="flex bg-black/50 backdrop-blur-md rounded-full p-1 border border-white/10" onPointerDown={e => e.stopPropagation()}>
+              <button onClick={() => { physics.current.scale = Math.max(physics.current.scale - 0.5, 0.5); updateDOM(); }} className="ui-btn p-2 text-white/70 hover:text-white"><ZoomOut size={20} /></button>
+              <button onClick={() => { physics.current.scale = Math.min(physics.current.scale + 0.5, 10); updateDOM(); }} className="ui-btn p-2 text-white/70 hover:text-white"><ZoomIn size={20} /></button>
               <div className="w-px bg-white/20 mx-1"></div>
-              <button onClick={onClose} className="p-2 text-white/70 hover:text-white"><X size={20} /></button>
+              <button onClick={onClose} className="ui-btn p-2 text-white/70 hover:text-white"><X size={20} /></button>
             </div>
           </div>
         </div>
 
-        {/* DETAILS PANEL */}
-        <div className={`fixed lg:relative inset-x-0 bottom-0 z-[60] lg:z-auto bg-white lg:w-1/4 flex flex-col transition-all duration-300 ease-out shadow-[0_-8px_30px_rgb(0,0,0,0.12)] lg:shadow-none ${showMobileInfo && showControls ? 'translate-y-0 opacity-100' : (window.innerWidth >= 1024 && showControls ? 'translate-y-0 opacity-100' : 'translate-y-full lg:translate-x-full lg:translate-y-0 opacity-0')}`}>
-          <div className="lg:hidden w-full flex justify-center py-4 cursor-pointer" onClick={() => setShowMobileInfo(false)}><div className="w-12 h-1.5 bg-gray-200 rounded-full"></div></div>
+        {/* 右侧信息详情面板 */}
+        <div 
+          className={`fixed lg:relative inset-x-0 bottom-0 z-[60] lg:z-auto bg-white lg:w-1/4 flex flex-col transition-all duration-300 shadow-2xl lg:shadow-none ${showMobileInfo && showControls ? 'translate-y-0' : (window.innerWidth >= 1024 && showControls && viewMode !== 'image-edit' ? 'translate-y-0' : 'translate-y-full lg:translate-x-full lg:translate-y-0 opacity-0 pointer-events-none lg:pointer-events-auto')}`}
+          onPointerDown={e => e.stopPropagation()}
+        >
+          <div className="lg:hidden w-full flex justify-center py-4 cursor-pointer" onClick={() => setShowMobileInfo(false)}><div className="w-12 h-1 bg-gray-200 rounded-full"></div></div>
           
           <div className="px-6 py-4 border-b border-gray-100 hidden lg:flex justify-between items-center">
              <div className="flex gap-4">
-                 <button onClick={() => setViewMode('image-edit')} className="p-1.5 hover:bg-gray-100 rounded-md text-gray-600 transition-colors"><Crop size={18} /></button>
-                 <button onClick={toggleFullscreen} className="p-1.5 hover:bg-gray-100 rounded-md text-gray-600 transition-colors">{isFullscreen ? <Minimize size={18} /> : <Maximize size={18} />}</button>
-                 <button onClick={() => setIsPickerActive(!isPickerActive)} className={`p-1.5 hover:bg-gray-100 rounded-md transition-colors ${isPickerActive ? 'bg-gray-200 text-blue-600' : 'text-gray-600'}`}><Pipette size={18} /></button>
+                 <button onClick={() => setViewMode('image-edit')} className="ui-btn p-1.5 hover:bg-gray-100 rounded-md text-gray-600"><Crop size={18} /></button>
+                 <button onClick={() => { setIsPickerActive(!isPickerActive); setPickedColor(null); }} className={`ui-btn p-1.5 hover:bg-gray-100 rounded-md ${isPickerActive ? 'bg-gray-200 text-blue-600 font-bold' : 'text-gray-600'}`}><Pipette size={18} /></button>
              </div>
-             <button onClick={onClose} className="p-1 hover:bg-gray-100 rounded-full"><X size={18} /></button>
+             <button onClick={onClose} className="ui-btn p-1 hover:bg-gray-100 rounded-full"><X size={18} /></button>
           </div>
 
           <div className="p-6 space-y-8 overflow-y-auto max-h-[70vh] lg:max-h-none custom-scrollbar">
             {viewMode === 'meta-edit' ? (
               <div className="space-y-4 animate-in fade-in duration-300">
-                <input value={editedTitle} onChange={e => setEditedTitle(e.target.value)} className="w-full text-xl font-bold border-b border-gray-900 focus:outline-none py-1" />
+                <input value={editedTitle} onChange={e => setEditedTitle(e.target.value)} className="w-full text-xl font-black border-b border-gray-900 focus:outline-none py-1" />
                 <textarea value={editedDesc} onChange={e => setEditedDesc(e.target.value)} className="w-full text-sm text-gray-500 border border-gray-200 p-3 h-32 focus:outline-none rounded-none" />
-                <button onClick={() => { onUpdate({ ...activePhoto, title: editedTitle, description: editedDesc }); setViewMode('view'); }} className="w-full bg-black text-white py-3 font-bold uppercase text-xs tracking-widest">确认修改</button>
+                <button onClick={() => { onUpdate({ ...activePhoto, title: editedTitle, description: editedDesc }); setViewMode('view'); }} className="ui-btn w-full bg-black text-white py-3 font-black uppercase text-xs tracking-widest">确认修改</button>
               </div>
             ) : (
               <div className="space-y-6 animate-in fade-in duration-300">
                 <div className="flex justify-between items-start gap-4">
                   <h1 className="text-2xl font-black text-gray-900 leading-tight">{activePhoto.title}</h1>
-                  <button onClick={() => setViewMode('meta-edit')} className="p-2 text-gray-400 hover:text-black transition-colors"><Edit2 size={20} /></button>
+                  <button onClick={() => setViewMode('meta-edit')} className="ui-btn p-2 text-gray-400 hover:text-black"><Edit2 size={20} /></button>
                 </div>
                 <p className="text-sm text-gray-500 leading-relaxed">{activePhoto.description || '暂无备注...'}</p>
+                
                 <div className="space-y-4">
-                  <div className="flex items-center gap-3 text-xs font-bold text-gray-400 uppercase tracking-widest"><Folder size={14} /> 相册</div>
-                  <select value={activePhoto.categoryId} onChange={e => onUpdate({ ...activePhoto, categoryId: e.target.value })} className="w-full p-3 bg-gray-50 border-none rounded-none text-sm font-bold appearance-none cursor-pointer">
+                  <div className="flex items-center gap-3 text-xs font-bold text-gray-400 uppercase tracking-widest"><Folder size={14} /> 相册分类</div>
+                  <select 
+                    value={activePhoto.categoryId} 
+                    onChange={e => onUpdate({ ...activePhoto, categoryId: e.target.value })} 
+                    className="ui-btn w-full p-3 bg-gray-50 border-none rounded-none text-sm font-bold appearance-none cursor-pointer"
+                  >
                     {categories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
                   </select>
                 </div>
+
                 <div className="space-y-4">
                   <div className="flex items-center gap-3 text-xs font-bold text-gray-400 uppercase tracking-widest"><Tag size={14} /> 标签</div>
                   <div className="flex flex-wrap gap-2">
-                    {activePhoto.tags.map(t => <span key={t} className="px-2 py-1 bg-gray-100 text-[10px] font-bold text-gray-600 flex items-center gap-1 rounded-none">#{t} <button onClick={() => onUpdate({ ...activePhoto, tags: activePhoto.tags.filter(tag => tag !== t) })} className="ml-1 text-gray-300 hover:text-red-500">×</button></span>)}
-                    <input value={newTag} onChange={e => setNewTag(e.target.value)} onKeyDown={e => e.key === 'Enter' && (onUpdate({ ...activePhoto, tags: [...new Set([...activePhoto.tags, newTag.trim()])] }), setNewTag(''))} placeholder="+ 标签" className="text-[10px] font-bold border-none outline-none bg-transparent w-20" />
+                    {activePhoto.tags.map(t => <span key={t} className="px-2 py-1 bg-gray-100 text-[10px] font-bold text-gray-600 flex items-center gap-1">#{t} <button onClick={() => onUpdate({ ...activePhoto, tags: activePhoto.tags.filter(tag => tag !== t) })} className="ui-btn ml-1 text-gray-300 hover:text-red-500">×</button></span>)}
+                    <input 
+                      value={newTag} 
+                      onChange={e => setNewTag(e.target.value)} 
+                      onKeyDown={e => e.key === 'Enter' && (onUpdate({ ...activePhoto, tags: [...new Set([...activePhoto.tags, newTag.trim()])] }), setNewTag(''))} 
+                      placeholder="+ 标签" 
+                      className="text-[10px] font-bold border-none outline-none bg-transparent w-20"
+                    />
                   </div>
                 </div>
               </div>
