@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Photo, Category } from '../types';
-// 添加缺失的 Tag 图标导入
 import { X, Edit2, Folder, Trash2, ChevronLeft, ChevronRight, Heart, Pipette, ZoomIn, ZoomOut, Maximize, Info, Crop, RotateCw, FlipHorizontal, Save, Plus, RotateCcw, Tag } from 'lucide-react';
 import { saveImageToDB } from '../services/imageDB';
 
@@ -116,7 +115,6 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
   };
 
   const handlePointerDown = (e: React.PointerEvent) => {
-    // 排除 UI 点击：如果是按钮或输入框，手势层不介入
     if ((e.target as HTMLElement).closest('.ui-btn')) return;
 
     if (isPickerActive) {
@@ -135,7 +133,6 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
       p.lastY = e.clientY;
       p.startTime = Date.now();
     } else if (activePointers.current.size === 2) {
-      // 显式转换 pts 类型以修复 TS 错误
       const pts = Array.from(activePointers.current.values()) as { x: number; y: number }[];
       p.lastDist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
       p.startScale = p.scale;
@@ -150,16 +147,13 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
 
     const p = physics.current;
 
-    // 处理缩放 (2指)
     if (activePointers.current.size === 2) {
-      // 显式转换 pts 类型以修复 TS 错误
       const pts = Array.from(activePointers.current.values()) as { x: number; y: number }[];
       const dist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
-      const ratio = dist / p.lastDist;
+      const ratio = dist / (p.lastDist || 1);
       p.scale = Math.min(Math.max(p.startScale * ratio, 0.5), 10);
       updateDOM();
     } 
-    // 处理拖拽 (1指，且已缩放或在编辑模式)
     else if (activePointers.current.size === 1 && p.isDragging) {
       const dx = e.clientX - p.lastX;
       const dy = e.clientY - p.lastY;
@@ -180,7 +174,11 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
     
     // 如果是快速点按
     if (activePointers.current.size === 1 && duration < 250) {
-      if (viewMode === 'view' && !isPickerActive) {
+      if (showMobileInfo) {
+        // 如果面板开着，点击图片区域收起面板
+        setShowMobileInfo(false);
+      } else if (viewMode === 'view' && !isPickerActive) {
+        // 否则切换控制栏显隐
         setShowControls(prev => !prev);
       }
     }
@@ -251,6 +249,7 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
           onUpdate({ ...photo!, url: URL.createObjectURL(blob), updatedAt: Date.now() });
           setViewMode('view');
           setCropModeActive(false);
+          setIsPickerActive(false);
           resetPhysics();
         }
         setIsProcessing(false);
@@ -285,7 +284,7 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
                 className="max-w-full max-h-full object-contain pointer-events-auto no-drag"
               />
               
-              {/* 编辑模式下的裁切辅助线和阴影 */}
+              {/* 编辑模式下的辅助线 */}
               {viewMode === 'image-edit' && cropModeActive && (
                 <div className="absolute inset-0 z-20 pointer-events-none border-2 border-white/90 shadow-[0_0_0_9999px_rgba(0,0,0,0.5)]">
                    <div className="w-full h-full grid grid-cols-3 grid-rows-3">
@@ -305,28 +304,10 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
             onPointerCancel={handlePointerUp}
           />
 
-          {/* 状态栏按钮：退出、重置 */}
-          <div className={`absolute top-0 inset-x-0 p-4 z-50 flex justify-between items-start lg:hidden pt-safe transition-all duration-300 ${showControls ? 'translate-y-0 opacity-100' : '-translate-y-full opacity-0 pointer-events-none'}`}>
-            <button 
-              onPointerDown={(e) => e.stopPropagation()}
-              onClick={onClose}
-              className="ui-btn p-3 text-white bg-black/40 border border-white/20 backdrop-blur-md rounded-full shadow-lg"
-            >
-              <X size={24} />
-            </button>
-            <button 
-              onPointerDown={(e) => e.stopPropagation()}
-              onClick={resetPhysics}
-              className="ui-btn p-3 text-white bg-black/40 border border-white/20 backdrop-blur-md rounded-full shadow-lg"
-            >
-              <RotateCcw size={20} />
-            </button>
-          </div>
-
-          {/* 取色器 UI */}
+          {/* 取色器实时反馈 UI */}
           {isPickerActive && pickedColor && (
              <div 
-               className={`absolute left-1/2 -translate-x-1/2 z-[70] flex items-center gap-4 bg-white/95 backdrop-blur-md pl-4 pr-2 py-2 rounded-full shadow-2xl transition-all duration-300 ${showControls ? 'bottom-28 lg:bottom-12' : 'bottom-10'}`}
+               className={`absolute left-1/2 -translate-x-1/2 z-[70] flex items-center gap-4 bg-white/95 backdrop-blur-md pl-4 pr-2 py-2 rounded-full shadow-2xl transition-all duration-300 ${viewMode === 'image-edit' ? 'bottom-64' : (showControls ? 'bottom-32 lg:bottom-12' : 'bottom-10')}`}
                onPointerDown={e => e.stopPropagation()}
              >
                 <div className="w-8 h-8 rounded-full border border-slate-200 shadow-inner" style={{backgroundColor: pickedColor}}></div>
@@ -346,7 +327,7 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
              </div>
           )}
 
-          {/* 左右导航 */}
+          {/* 左右导航按钮 */}
           {viewMode === 'view' && showControls && (
             <>
               <button 
@@ -366,18 +347,17 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
             </>
           )}
 
-          {/* 普通底部操作栏 */}
-          <div className={`absolute bottom-0 inset-x-0 z-50 flex justify-around items-center lg:hidden pb-safe pt-10 bg-gradient-to-t from-black/90 to-transparent transition-all duration-300 ${viewMode === 'view' && showControls && !showMobileInfo ? 'translate-y-0' : 'translate-y-full opacity-0 pointer-events-none'}`}>
-            <button onPointerDown={e => e.stopPropagation()} onClick={() => setShowMobileInfo(true)} className="ui-btn p-4 text-white/90 flex flex-col items-center gap-1"><Info size={24} /><span className="text-[10px]">信息</span></button>
-            <button onPointerDown={e => e.stopPropagation()} onClick={() => onUpdate({ ...activePhoto, isFavorite: !activePhoto.isFavorite })} className={`ui-btn p-4 flex flex-col items-center gap-1 ${activePhoto.isFavorite ? 'text-red-500' : 'text-white'}`}><Heart size={24} fill={activePhoto.isFavorite ? 'currentColor' : 'none'} /><span className="text-[10px]">收藏</span></button>
-            <button onPointerDown={e => e.stopPropagation()} onClick={() => { setIsPickerActive(!isPickerActive); setPickedColor(null); }} className={`ui-btn p-4 flex flex-col items-center gap-1 ${isPickerActive ? 'text-blue-400 font-bold' : 'text-white/90'}`}><Pipette size={24} /><span className="text-[10px]">取色</span></button>
-            <button onPointerDown={e => e.stopPropagation()} onClick={() => setViewMode('image-edit')} className="ui-btn p-4 text-white/90 flex flex-col items-center gap-1"><Crop size={24} /><span className="text-[10px]">编辑</span></button>
-            <button onPointerDown={e => e.stopPropagation()} onClick={() => isDeleteConfirm ? (onDelete(activePhoto.id), onClose()) : (setIsDeleteConfirm(true), setTimeout(() => setIsDeleteConfirm(false), 2000))} className={`ui-btn p-4 flex flex-col items-center gap-1 ${isDeleteConfirm ? 'text-red-500 font-bold' : 'text-white'}`}><Trash2 size={24} /><span className="text-[10px]">{isDeleteConfirm ? '确认' : '删除'}</span></button>
+          {/* 移动端主底部功能栏 (包含退出按钮) */}
+          <div className={`absolute bottom-0 inset-x-0 z-50 flex justify-around items-center lg:hidden pb-safe pt-10 bg-gradient-to-t from-black/95 via-black/80 to-transparent transition-all duration-300 ${viewMode === 'view' && showControls && !showMobileInfo ? 'translate-y-0' : 'translate-y-full opacity-0 pointer-events-none'}`}>
+            <button onPointerDown={e => e.stopPropagation()} onClick={onClose} className="ui-btn p-4 text-white flex flex-col items-center gap-1 transition-transform active:scale-90"><X size={26} /><span className="text-[10px] font-bold">退出</span></button>
+            <button onPointerDown={e => e.stopPropagation()} onClick={() => setShowMobileInfo(true)} className="ui-btn p-4 text-white/80 flex flex-col items-center gap-1"><Info size={24} /><span className="text-[10px]">信息</span></button>
+            <button onPointerDown={e => e.stopPropagation()} onClick={() => onUpdate({ ...activePhoto, isFavorite: !activePhoto.isFavorite })} className={`ui-btn p-4 flex flex-col items-center gap-1 ${activePhoto.isFavorite ? 'text-red-500' : 'text-white/80'}`}><Heart size={24} fill={activePhoto.isFavorite ? 'currentColor' : 'none'} /><span className="text-[10px]">收藏</span></button>
+            <button onPointerDown={e => e.stopPropagation()} onClick={() => setViewMode('image-edit')} className="ui-btn p-4 text-white/80 flex flex-col items-center gap-1"><Crop size={24} /><span className="text-[10px]">编辑</span></button>
+            <button onPointerDown={e => e.stopPropagation()} onClick={() => isDeleteConfirm ? (onDelete(activePhoto.id), onClose()) : (setIsDeleteConfirm(true), setTimeout(() => setIsDeleteConfirm(false), 2000))} className={`ui-btn p-4 flex flex-col items-center gap-1 ${isDeleteConfirm ? 'text-red-500 font-bold' : 'text-white/80'}`}><Trash2 size={24} /><span className="text-[10px]">{isDeleteConfirm ? '确认' : '删除'}</span></button>
           </div>
 
-          {/* 图片编辑工具栏 */}
+          {/* 编辑模式工具面板 */}
           <div className={`absolute bottom-0 inset-x-0 z-[60] flex flex-col gap-6 bg-black/95 backdrop-blur-2xl border-t border-white/10 p-6 pb-safe transition-all duration-300 ${viewMode === 'image-edit' ? 'translate-y-0' : 'translate-y-full opacity-0 pointer-events-none'}`}>
-            
             <div className="flex flex-col gap-3">
               <div className="flex justify-between items-center text-[10px] font-black uppercase tracking-widest text-white/50">
                 <span>旋转</span>
@@ -395,29 +375,32 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
             <div className="flex justify-around items-center">
               <button onPointerDown={e => e.stopPropagation()} onClick={() => setEditRotation(prev => (Math.floor(prev/90)*90 + 90) % 360)} className="ui-btn flex flex-col items-center gap-1 text-white/70 hover:text-white"><RotateCw size={22} /><span className="text-[10px]">90°</span></button>
               <button onPointerDown={e => e.stopPropagation()} onClick={() => setEditFlipX(prev => prev * -1)} className="ui-btn flex flex-col items-center gap-1 text-white/70 hover:text-white"><FlipHorizontal size={22} /><span className="text-[10px]">翻转</span></button>
-              <button onPointerDown={e => e.stopPropagation()} onClick={() => setCropModeActive(!cropModeActive)} className={`ui-btn flex flex-col items-center gap-1 ${cropModeActive ? 'text-blue-400' : 'text-blue-400' && 'text-white/70'}`}><Maximize size={22} /><span className="text-[10px]">裁切网格</span></button>
+              <button onPointerDown={e => e.stopPropagation()} onClick={() => setCropModeActive(!cropModeActive)} className={`ui-btn flex flex-col items-center gap-1 ${cropModeActive ? 'text-blue-400' : 'text-white/70'}`}><Maximize size={22} /><span className="text-[10px]">裁切网格</span></button>
+              <button onPointerDown={e => e.stopPropagation()} onClick={() => { setIsPickerActive(!isPickerActive); setPickedColor(null); }} className={`ui-btn flex flex-col items-center gap-1 ${isPickerActive ? 'text-blue-400' : 'text-white/70 hover:text-white'}`}><Pipette size={22} /><span className="text-[10px]">取色</span></button>
             </div>
             
             <div className="flex gap-3">
-              <button onPointerDown={e => e.stopPropagation()} onClick={() => { setViewMode('view'); setCropModeActive(false); resetPhysics(); }} className="ui-btn flex-1 py-4 bg-white/10 text-white font-black uppercase text-xs">取消</button>
+              <button onPointerDown={e => e.stopPropagation()} onClick={() => { setViewMode('view'); setCropModeActive(false); setIsPickerActive(false); resetPhysics(); }} className="ui-btn flex-1 py-4 bg-white/10 text-white font-black uppercase text-xs">取消</button>
               <button onPointerDown={e => e.stopPropagation()} onClick={handleImageSave} disabled={isProcessing} className="ui-btn flex-1 py-4 bg-white text-black font-black uppercase text-xs flex items-center justify-center gap-2">
                 {isProcessing ? <div className="w-3 h-3 border-2 border-black border-t-transparent animate-spin rounded-full"></div> : <Save size={16} />} 保存
               </button>
             </div>
           </div>
 
-          {/* 桌面端浮动控制栏 */}
+          {/* 桌面端常驻浮动控制栏 */}
           <div className={`absolute top-8 right-8 z-50 hidden lg:flex gap-3 transition-all duration-300 ${showControls ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}>
             <div className="flex bg-black/50 backdrop-blur-md rounded-full p-1 border border-white/10" onPointerDown={e => e.stopPropagation()}>
               <button onClick={() => { physics.current.scale = Math.max(physics.current.scale - 0.5, 0.5); updateDOM(); }} className="ui-btn p-2 text-white/70 hover:text-white"><ZoomOut size={20} /></button>
               <button onClick={() => { physics.current.scale = Math.min(physics.current.scale + 0.5, 10); updateDOM(); }} className="ui-btn p-2 text-white/70 hover:text-white"><ZoomIn size={20} /></button>
+              <div className="w-px bg-white/20 mx-1"></div>
+              <button onClick={resetPhysics} title="复位视图" className="ui-btn p-2 text-white/70 hover:text-white"><RotateCcw size={18} /></button>
               <div className="w-px bg-white/20 mx-1"></div>
               <button onClick={onClose} className="ui-btn p-2 text-white/70 hover:text-white"><X size={20} /></button>
             </div>
           </div>
         </div>
 
-        {/* 右侧信息详情面板 */}
+        {/* 侧边/底部详情面板 */}
         <div 
           className={`fixed lg:relative inset-x-0 bottom-0 z-[60] lg:z-auto bg-white lg:w-1/4 flex flex-col transition-all duration-300 shadow-2xl lg:shadow-none ${showMobileInfo && showControls ? 'translate-y-0' : (window.innerWidth >= 1024 && showControls && viewMode !== 'image-edit' ? 'translate-y-0' : 'translate-y-full lg:translate-x-full lg:translate-y-0 opacity-0 pointer-events-none lg:pointer-events-auto')}`}
           onPointerDown={e => e.stopPropagation()}
@@ -427,12 +410,11 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
           <div className="px-6 py-4 border-b border-gray-100 hidden lg:flex justify-between items-center">
              <div className="flex gap-4">
                  <button onClick={() => setViewMode('image-edit')} className="ui-btn p-1.5 hover:bg-gray-100 rounded-md text-gray-600"><Crop size={18} /></button>
-                 <button onClick={() => { setIsPickerActive(!isPickerActive); setPickedColor(null); }} className={`ui-btn p-1.5 hover:bg-gray-100 rounded-md ${isPickerActive ? 'bg-gray-200 text-blue-600 font-bold' : 'text-gray-600'}`}><Pipette size={18} /></button>
              </div>
              <button onClick={onClose} className="ui-btn p-1 hover:bg-gray-100 rounded-full"><X size={18} /></button>
           </div>
 
-          <div className="p-6 space-y-8 overflow-y-auto max-h-[70vh] lg:max-h-none custom-scrollbar">
+          <div className="p-6 pb-32 space-y-8 overflow-y-auto max-h-[70vh] lg:max-h-none custom-scrollbar">
             {viewMode === 'meta-edit' ? (
               <div className="space-y-4 animate-in fade-in duration-300">
                 <input value={editedTitle} onChange={e => setEditedTitle(e.target.value)} className="w-full text-xl font-black border-b border-gray-900 focus:outline-none py-1" />
