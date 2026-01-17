@@ -1,6 +1,7 @@
+
 import React, { useState, useRef, useEffect } from 'react';
 import { Note, NoteCategory } from '../types';
-import { Bold, Highlighter, Image as ImageIcon, CheckSquare, Plus, Trash2, ArrowLeft, Save, StickyNote, FolderPlus, Edit2, Heading1, Heading2, Heading3 } from 'lucide-react';
+import { Bold, Highlighter, Image as ImageIcon, CheckSquare, Plus, Trash2, ArrowLeft, Save, StickyNote, FolderPlus, Edit2, Heading1, Heading2, Heading3, Check, X } from 'lucide-react';
 
 const DEFAULT_CATEGORIES: NoteCategory[] = [
   { id: 'all', name: '全部' },
@@ -24,6 +25,10 @@ export const NoteTool: React.FC = () => {
   const [selectedCategoryId, setSelectedCategoryId] = useState<string>('all');
   const [selectedNoteId, setSelectedNoteId] = useState<string | null>(null);
   
+  // Selection Mode State
+  const [isSelectionMode, setIsSelectionMode] = useState(false);
+  const [selectedNoteIds, setSelectedNoteIds] = useState<Set<string>>(new Set());
+
   // Edit State
   const [editContent, setEditContent] = useState('');
   const [editTitle, setEditTitle] = useState('');
@@ -47,17 +52,21 @@ export const NoteTool: React.FC = () => {
     localStorage.setItem('inspiration_notes', JSON.stringify(notes));
   }, [notes]);
 
-  // History Handler for Editor View
+  // History Handler for Editor View and Selection Mode
   useEffect(() => {
     const handlePopState = (e: PopStateEvent) => {
       const modalKey = e.state?.modal;
       if (selectedNoteId && modalKey !== 'note-editor') {
         setSelectedNoteId(null);
       }
+      if (isSelectionMode && modalKey !== 'note-selection') {
+        setIsSelectionMode(false);
+        setSelectedNoteIds(new Set());
+      }
     };
     window.addEventListener('popstate', handlePopState);
     return () => window.removeEventListener('popstate', handlePopState);
-  }, [selectedNoteId]);
+  }, [selectedNoteId, isSelectionMode]);
 
   const openNoteEditor = (noteId: string) => {
      window.history.pushState({ modal: 'note-editor' }, '', window.location.href);
@@ -66,6 +75,15 @@ export const NoteTool: React.FC = () => {
   
   const closeNoteEditor = () => {
      window.history.back();
+  };
+  
+  const enterSelectionMode = () => {
+    window.history.pushState({ modal: 'note-selection' }, '', window.location.href);
+    setIsSelectionMode(true);
+  };
+
+  const exitSelectionMode = () => {
+    window.history.back();
   };
 
   // Sync content when selecting note
@@ -98,6 +116,7 @@ export const NoteTool: React.FC = () => {
   };
 
   const handleCreateNote = () => {
+    if (isSelectionMode) return;
     const categoryId = selectedCategoryId === 'all' ? 'idea' : selectedCategoryId;
     const newNote: Note = {
       id: crypto.randomUUID(),
@@ -119,6 +138,14 @@ export const NoteTool: React.FC = () => {
       if (selectedNoteId === id) closeNoteEditor();
     }
   };
+  
+  const handleBatchDelete = () => {
+      if (selectedNoteIds.size === 0) return;
+      if (confirm(`确定删除选中的 ${selectedNoteIds.size} 个便签吗？`)) {
+          setNotes(prev => prev.filter(n => !selectedNoteIds.has(n.id)));
+          exitSelectionMode();
+      }
+  };
 
   const handleSave = () => {
     if (selectedNoteId && editorRef.current) {
@@ -133,6 +160,36 @@ export const NoteTool: React.FC = () => {
     }
   };
 
+  // Note Long Press for Selection
+  const startNotePress = (noteId: string) => {
+      if (isSelectionMode) return;
+      isLongPress.current = false;
+      longPressTimer.current = setTimeout(() => {
+          isLongPress.current = true;
+          if (!isSelectionMode) {
+              enterSelectionMode();
+              setSelectedNoteIds(new Set([noteId]));
+              if (navigator.vibrate) navigator.vibrate(50);
+          }
+      }, 600);
+  };
+
+  const handleNoteClick = (noteId: string) => {
+      if (isLongPress.current) return;
+      
+      if (isSelectionMode) {
+          const newSet = new Set(selectedNoteIds);
+          if (newSet.has(noteId)) {
+              newSet.delete(noteId);
+          } else {
+              newSet.add(noteId);
+          }
+          setSelectedNoteIds(newSet);
+      } else {
+          openNoteEditor(noteId);
+      }
+  };
+
   // Category Long Press Logic
   const startCategoryPress = (category: NoteCategory) => {
     if (category.id === 'all') return;
@@ -143,7 +200,7 @@ export const NoteTool: React.FC = () => {
     }, 600);
   };
 
-  const cancelCategoryPress = () => {
+  const cancelPress = () => {
     if (longPressTimer.current) {
       clearTimeout(longPressTimer.current);
       longPressTimer.current = null;
@@ -153,6 +210,9 @@ export const NoteTool: React.FC = () => {
   const handleCategoryClick = (id: string) => {
     if (isLongPress.current) return;
     setSelectedCategoryId(id);
+    if (isSelectionMode) {
+        exitSelectionMode();
+    }
   };
 
   const handleRenameCategory = () => {
@@ -177,8 +237,7 @@ export const NoteTool: React.FC = () => {
   };
 
   // --- Editor Logic ---
-
-  // Find the current block element (div, p, etc) inside editor
+  // (Editor logic mostly unchanged)
   const getCurrentBlock = (): HTMLElement | null => {
     const selection = window.getSelection();
     if (!selection || !selection.rangeCount) return null;
@@ -190,8 +249,6 @@ export const NoteTool: React.FC = () => {
         if (el.parentElement) el = el.parentElement;
         else break;
     }
-    // If we've reached the root editor div and the node is the editor div itself
-    // or a direct text node child, we consider "no block found" so we can handle it manually
     if (el === editorRef.current) return null;
     return el;
   };
@@ -200,20 +257,16 @@ export const NoteTool: React.FC = () => {
     const selection = window.getSelection();
     if (!selection || !selection.rangeCount) return;
 
-    // If text is already selected, just apply to selection
     if (!selection.isCollapsed) {
         document.execCommand(command, false, value);
         if (editorRef.current) editorRef.current.focus();
         return;
     }
 
-    // Cursor is collapsed. Identify the block.
     let block = getCurrentBlock();
-
-    // If no block is found (e.g. raw text in editor root), try to wrap current line in a div first
     if (!block) {
         document.execCommand('formatBlock', false, 'div');
-        block = getCurrentBlock(); // Try to find it again
+        block = getCurrentBlock(); 
     }
 
     if (block) {
@@ -222,23 +275,18 @@ export const NoteTool: React.FC = () => {
         selection.removeAllRanges();
         selection.addRange(range);
         document.execCommand(command, false, value);
-        // Move cursor to end of block
         selection.collapseToEnd();
     } else {
-        // Fallback: just execute (might toggle style for future typing)
         document.execCommand(command, false, value);
     }
-    
     if (editorRef.current) editorRef.current.focus();
   };
 
   const toggleHeading = (tag: string) => {
       const block = getCurrentBlock();
-      // If currently the same heading, revert to div (normal text)
       if (block && block.tagName === tag.toUpperCase()) {
           document.execCommand('formatBlock', false, 'div');
       } else {
-          // formatBlock automatically handles wrapping text nodes if needed
           document.execCommand('formatBlock', false, tag);
       }
       if (editorRef.current) editorRef.current.focus();
@@ -249,8 +297,6 @@ export const NoteTool: React.FC = () => {
     if (!selection || !selection.rangeCount) return;
     
     let block = getCurrentBlock();
-
-    // Ensure we have a block to work with
     if (!block) {
          document.execCommand('formatBlock', false, 'div');
          block = getCurrentBlock();
@@ -258,26 +304,20 @@ export const NoteTool: React.FC = () => {
     
     if (block) {
         if (block.classList.contains('todo-item')) {
-             // Convert back to normal div, remove checkbox
              const newDiv = document.createElement('div');
-             // Regex to strip the input tag, keeping inner content
              newDiv.innerHTML = block.innerHTML.replace(/<input[^>]*>/i, '');
              block.replaceWith(newDiv);
-             
              const range = document.createRange();
              range.selectNodeContents(newDiv);
              range.collapse(false);
              selection.removeAllRanges();
              selection.addRange(range);
         } else {
-            // Convert to todo item
             const newDiv = document.createElement('div');
             newDiv.className = 'todo-item';
-            // Use min-height: 2em to match the line-height: 2 setting, preventing collapse on empty lines
             newDiv.style.cssText = 'display: flex; align-items: center; min-height: 2em;';
             newDiv.innerHTML = `<input type="checkbox" style="margin-right: 8px;" />${block.innerHTML}`;
             block.replaceWith(newDiv);
-            
             const range = document.createRange();
             range.selectNodeContents(newDiv);
             range.collapse(false);
@@ -285,11 +325,9 @@ export const NoteTool: React.FC = () => {
             selection.addRange(range);
         }
     } else {
-        // Insert new checkbox at root (fallback)
         const html = '<div class="todo-item" style="display: flex; align-items: center; min-height: 2em;"><input type="checkbox" style="margin-right: 8px;" /></div>';
         document.execCommand('insertHTML', false, html);
     }
-    
     if (editorRef.current) editorRef.current.focus();
   };
 
@@ -309,17 +347,13 @@ export const NoteTool: React.FC = () => {
       let node = range.commonAncestorContainer;
       if (node.nodeType === 3) node = node.parentNode!;
 
-      // Check for Checkbox Line
       const todoItem = (node as HTMLElement).closest('.todo-item');
       if (todoItem) {
         e.preventDefault(); 
-        
-        // Create new checkbox line with NO extra whitespace
         const newRow = document.createElement('div');
         newRow.className = 'todo-item';
         newRow.style.display = 'flex';
         newRow.style.alignItems = 'center';
-        // Ensure proper height for empty lines
         newRow.style.minHeight = '2em';
         
         const checkbox = document.createElement('input');
@@ -334,16 +368,13 @@ export const NoteTool: React.FC = () => {
         }
 
         const newRange = document.createRange();
-        // Select inside the new row
         newRange.selectNodeContents(newRow);
-        // Collapse to end (after the input)
         newRange.collapse(false);
         selection.removeAllRanges();
         selection.addRange(newRange);
       }
     }
     
-    // Backspace: Delete empty checkbox line and convert to normal line
     if (e.key === 'Backspace') {
       const selection = window.getSelection();
       if (!selection || !selection.rangeCount || !selection.isCollapsed) return;
@@ -353,17 +384,11 @@ export const NoteTool: React.FC = () => {
       if (node.nodeType === 3) node = node.parentNode!;
       
       const todoItem = (node as HTMLElement).closest('.todo-item');
-      // If we are in a todo item and the content is empty (ignoring the checkbox input itself)
       if (todoItem && (todoItem as HTMLElement).innerText.trim() === '') {
-         // Even if offset is not 0 (e.g. if there is a phantom space), we treat it as empty
          e.preventDefault();
-         
-         // Convert to normal div
          const newDiv = document.createElement('div');
-         newDiv.innerHTML = '<br>'; // Placeholder for empty line height
+         newDiv.innerHTML = '<br>'; 
          todoItem.replaceWith(newDiv);
-         
-         // Place cursor inside new div
          const newRange = document.createRange();
          newRange.selectNodeContents(newDiv);
          newRange.collapse(true);
@@ -376,10 +401,9 @@ export const NoteTool: React.FC = () => {
   // --- Views ---
 
   if (selectedNoteId) {
-    // EDITOR VIEW
+    // EDITOR VIEW (Unchanged)
     return (
       <div className="h-full flex flex-col bg-white">
-        {/* Header */}
         <div className="flex items-center justify-between p-4 border-b border-slate-200 bg-white sticky top-0 z-10">
           <div className="flex items-center gap-4 flex-1 overflow-hidden">
             <button onClick={closeNoteEditor} className="text-slate-500 hover:text-slate-900 shrink-0">
@@ -414,7 +438,6 @@ export const NoteTool: React.FC = () => {
           </div>
         </div>
 
-        {/* Toolbar - Compact */}
         <div className="flex items-center gap-1 p-2 border-b border-slate-100 bg-slate-50 overflow-x-auto">
           <ToolButton onClick={() => toggleHeading('h1')} icon={<Heading1 size={16} />} title="标题1" />
           <ToolButton onClick={() => toggleHeading('h2')} icon={<Heading2 size={16} />} title="标题2" />
@@ -430,11 +453,9 @@ export const NoteTool: React.FC = () => {
           </label>
         </div>
 
-        {/* Editor Area */}
         <div className="flex-1 overflow-y-auto p-4 custom-scrollbar bg-white">
            <div 
              ref={editorRef}
-             // Tailwind arbitrary variants to target inner HTML elements specifically
              className="prose prose-sm prose-slate max-w-3xl mx-auto focus:outline-none min-h-[50vh] 
                         [&>h1]:text-3xl [&>h1]:font-black [&>h1]:mt-6 [&>h1]:mb-4
                         [&>h2]:text-2xl [&>h2]:font-bold [&>h2]:mt-5 [&>h2]:mb-3
@@ -452,7 +473,7 @@ export const NoteTool: React.FC = () => {
 
   // LIST VIEW
   return (
-    <div className="h-full flex flex-col bg-gray-50">
+    <div className="h-full flex flex-col bg-gray-50 relative">
        
        {/* Top Bar: Categories */}
        <div className="bg-white border-b border-gray-200 px-4 py-2 flex items-center justify-between sticky top-0 z-10 shadow-sm">
@@ -461,8 +482,8 @@ export const NoteTool: React.FC = () => {
                <button
                  key={cat.id}
                  onPointerDown={() => startCategoryPress(cat)}
-                 onPointerUp={() => { cancelCategoryPress(); handleCategoryClick(cat.id); }}
-                 onPointerLeave={cancelCategoryPress}
+                 onPointerUp={() => { cancelPress(); handleCategoryClick(cat.id); }}
+                 onPointerLeave={cancelPress}
                  onContextMenu={(e) => e.preventDefault()}
                  className={`px-3 py-1 rounded-full text-[10px] font-bold transition-all whitespace-nowrap ${selectedCategoryId === cat.id ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}
                >
@@ -480,18 +501,26 @@ export const NoteTool: React.FC = () => {
        </div>
 
        {/* Main Content */}
-       <div className="flex-1 overflow-y-auto p-2 md:p-4">
+       <div className="flex-1 overflow-y-auto p-2 md:p-4 pb-20">
          <div className="flex justify-between items-end mb-4 px-2">
             <div>
                <h2 className="text-xl font-black text-slate-900 tracking-tight uppercase">灵感便签</h2>
                <p className="text-[10px] text-slate-400 mt-0.5 font-mono">{filteredNotes.length} 条笔记</p>
             </div>
-            <button 
-              onClick={handleCreateNote}
-              className="flex items-center gap-1 bg-slate-900 text-white px-3 py-1.5 text-xs font-bold uppercase tracking-wider hover:bg-slate-700 transition-colors rounded-none shadow-lg active:translate-y-0.5"
-            >
-              <Plus size={14} /> 新建
-            </button>
+            
+            {isSelectionMode ? (
+                <div className="flex gap-2">
+                     <button onClick={() => setSelectedNoteIds(new Set(filteredNotes.map(n => n.id)))} className="text-xs px-2 py-1 bg-white border border-slate-200 font-bold uppercase rounded-sm">全选</button>
+                     <button onClick={exitSelectionMode} className="text-xs px-2 py-1 bg-white border border-slate-200 font-bold uppercase rounded-sm">取消</button>
+                </div>
+            ) : (
+                <button 
+                  onClick={handleCreateNote}
+                  className="flex items-center gap-1 bg-slate-900 text-white px-3 py-1.5 text-xs font-bold uppercase tracking-wider hover:bg-slate-700 transition-colors rounded-none shadow-lg active:translate-y-0.5"
+                >
+                  <Plus size={14} /> 新建
+                </button>
+            )}
          </div>
 
          {filteredNotes.length === 0 ? (
@@ -504,33 +533,58 @@ export const NoteTool: React.FC = () => {
              {filteredNotes.map(note => (
                <div 
                  key={note.id}
-                 onClick={() => openNoteEditor(note.id)}
-                 className="bg-white p-3 md:p-4 shadow-sm hover:shadow-xl transition-all cursor-pointer border border-slate-100 group flex flex-col h-40 rounded-none relative hover:-translate-y-0.5"
+                 onClick={() => handleNoteClick(note.id)}
+                 onPointerDown={() => startNotePress(note.id)}
+                 onPointerUp={cancelPress}
+                 onPointerLeave={cancelPress}
+                 onContextMenu={(e) => e.preventDefault()}
+                 className={`bg-white p-3 md:p-4 shadow-sm hover:shadow-xl transition-all cursor-pointer border group flex flex-col h-40 rounded-none relative 
+                    ${isSelectionMode && selectedNoteIds.has(note.id) ? 'border-slate-900 ring-1 ring-slate-900 bg-slate-50' : 'border-slate-100 hover:-translate-y-0.5'}
+                 `}
                >
                  <div className="flex justify-between items-start mb-2">
                    <h3 className="font-bold text-sm text-slate-900 truncate pr-4">{note.title}</h3>
                    <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                      <button 
-                        onClick={(e) => handleDeleteNote(e, note.id)}
-                        className="p-1 text-slate-300 hover:text-red-500 transition-colors"
-                      >
-                        <Trash2 size={12} />
-                      </button>
+                      {!isSelectionMode && (
+                          <button 
+                            onClick={(e) => handleDeleteNote(e, note.id)}
+                            className="p-1 text-slate-300 hover:text-red-500 transition-colors"
+                          >
+                            <Trash2 size={12} />
+                          </button>
+                      )}
                    </div>
                  </div>
-                 <div className="flex-1 overflow-hidden text-xs text-slate-500 opacity-70 mask-image-b leading-relaxed">
-                    {/* Strip tags for preview, simplify text */}
+                 <div className="flex-1 overflow-hidden text-xs text-slate-500 opacity-70 mask-image-b leading-relaxed select-none">
                     {note.content.replace(/<[^>]+>/g, ' ').slice(0, 80) || '无内容'}
                  </div>
                  <div className="mt-2 pt-2 border-t border-slate-50 flex justify-between items-center text-[10px] text-slate-400 font-mono uppercase">
                    <span>{new Date(note.updatedAt).toLocaleDateString()}</span>
                    <span className="bg-slate-100 px-1.5 py-0.5 rounded-sm truncate max-w-[60px]">{categories.find(c => c.id === note.categoryId)?.name || '未知'}</span>
                  </div>
+
+                 {isSelectionMode && (
+                     <div className={`absolute top-2 right-2 w-5 h-5 border flex items-center justify-center ${selectedNoteIds.has(note.id) ? 'bg-slate-900 border-slate-900 text-white' : 'bg-white border-slate-300'}`}>
+                         {selectedNoteIds.has(note.id) && <Check size={12} />}
+                     </div>
+                 )}
                </div>
              ))}
            </div>
          )}
       </div>
+      
+      {/* Batch Action Bar */}
+      {isSelectionMode && (
+          <div className="absolute bottom-4 left-1/2 -translate-x-1/2 bg-slate-900 text-white px-6 py-3 shadow-xl flex items-center gap-6 animate-in slide-in-from-bottom-4 rounded-none z-20">
+              <span className="text-xs font-bold whitespace-nowrap">已选 {selectedNoteIds.size} 项</span>
+              <div className="h-4 w-px bg-white/20"></div>
+              <button onClick={handleBatchDelete} disabled={selectedNoteIds.size === 0} className="flex items-center gap-2 text-red-400 hover:text-red-300 font-bold text-xs uppercase tracking-wider disabled:opacity-50">
+                  <Trash2 size={16} /> 删除
+              </button>
+              <button onClick={exitSelectionMode} className="p-1 hover:bg-white/20 rounded-full"><X size={16}/></button>
+          </div>
+      )}
 
       {/* Context Menu for Categories */}
       {contextMenuCategory && (

@@ -1,10 +1,11 @@
+
 import React, { useState, useMemo, useRef, useEffect } from 'react';
 import { Sidebar } from './components/Sidebar';
 import { PhotoModal } from './components/PhotoModal';
 import { ColorTool } from './components/ColorTool';
 import { NoteTool } from './components/NoteTool';
 import { Photo, Category, ThemeColor, ColorGroup } from './types';
-import { Search, Upload, ImagePlus, Menu, Edit2, Trash2, LayoutGrid, Grid3x3, Square, Folder, ChevronRight, Image as ImageIcon, Check, Loader2, Clock, X, CheckSquare, MousePointer2, Move, Tag, FolderInput, FileImage, HardDrive, Plus, FolderPlus, AlertTriangle } from 'lucide-react';
+import { Search, Upload, ImagePlus, Menu, Edit2, Trash2, LayoutGrid, Grid3x3, Square, Folder, ChevronRight, Image as ImageIcon, Check, Loader2, Clock, X, CheckSquare, MousePointer2, Move, Tag, FolderInput, FileImage, HardDrive, Plus, FolderPlus, AlertTriangle, Database, Copy, Download, UploadCloud } from 'lucide-react';
 import { saveImageToDB, getImageFromDB, deleteImageFromDB, saveThumbnailToDB, getThumbnailFromDB } from './services/imageDB';
 
 // Initial Dummy Data
@@ -221,7 +222,7 @@ const THEME_COLORS_MAP: Record<ThemeColor, string> = {
 
 const App: React.FC = () => {
   // --- States ---
-  const [isLoading, setIsLoading] = useState(true);
+  const [isLoading, setIsLoading] = useState(false); // Changed default to false for instant load
   const [isProcessing, setIsProcessing] = useState(false);
   const [processingCount, setProcessingCount] = useState({ current: 0, total: 0 });
 
@@ -297,6 +298,9 @@ const App: React.FC = () => {
   const [isBatchRenameOpen, setIsBatchRenameOpen] = useState(false);
   const [batchRenameTemplate, setBatchRenameTemplate] = useState('Photo-{n}');
 
+  // Backup Import State
+  const [importDataString, setImportDataString] = useState('');
+
 
   // Delete Confirmation States
   const [contextMenuDeleteConfirm, setContextMenuDeleteConfirm] = useState(false);
@@ -324,46 +328,48 @@ const App: React.FC = () => {
     requestPersistence();
   }, []);
 
-  // Load photos from DB on startup
+  // Optimized Loading: Load photos from DB in background, render UI immediately
   useEffect(() => {
     const hydratePhotos = async () => {
-      setIsLoading(true);
-      const updatedPhotos = [...photos];
-      let hasChanges = false;
+      // Don't set isLoading(true) to avoid blocking UI. 
+      // Instead, we will progressively update the photos as they load.
+      
+      const photosToHydrate = photos.filter(p => !p.url.startsWith('http') && !p.url.startsWith('blob'));
+      if (photosToHydrate.length === 0) return;
 
-      await Promise.all(updatedPhotos.map(async (photo, index) => {
-        if (!photo.url.startsWith('http')) {
-            try {
-                // Try to load thumbnail first for speed
+      const BATCH_SIZE = 20; // Process in chunks to keep UI responsive
+      
+      for (let i = 0; i < photosToHydrate.length; i += BATCH_SIZE) {
+        const chunk = photosToHydrate.slice(i, i + BATCH_SIZE);
+        const updates: Record<string, string> = {};
+        
+        await Promise.all(chunk.map(async (photo) => {
+             try {
                 let blob = await getThumbnailFromDB(photo.id);
-                // Fallback to full image if no thumbnail
                 if (!blob) blob = await getImageFromDB(photo.id);
-                
                 if (blob) {
-                    const newUrl = URL.createObjectURL(blob);
-                    updatedPhotos[index] = { ...photo, url: newUrl };
-                    hasChanges = true;
+                    updates[photo.id] = URL.createObjectURL(blob);
                 }
-            } catch (e) {
-                console.error("Failed to load image from DB", photo.id);
-            }
-        }
-      }));
+             } catch (e) {
+                console.error("Hydration fail", photo.id);
+             }
+        }));
 
-      if (hasChanges) {
-        setPhotos(updatedPhotos);
+        setPhotos(prev => prev.map(p => updates[p.id] ? { ...p, url: updates[p.id] } : p));
+        // Small delay to yield to main thread
+        await new Promise(resolve => setTimeout(resolve, 10));
       }
-      setIsLoading(false);
     };
 
     hydratePhotos();
     
+    // Cleanup blobs on unmount
     return () => {
         photos.forEach(p => {
             if (p.url.startsWith('blob:')) URL.revokeObjectURL(p.url);
         });
     };
-  }, []);
+  }, []); // Run once on mount
   
   // Lazy load full quality image when modal opens
   useEffect(() => {
@@ -791,6 +797,77 @@ const App: React.FC = () => {
       setIsSelectionMode(false);
   };
 
+  // -- Backup & Restore Logic --
+  const handleExportData = async () => {
+    const data = {
+      version: 1,
+      timestamp: Date.now(),
+      photos: photos.map(p => ({ ...p, url: '' })), // Only metadata, URLs are local blobs
+      categories,
+      note_categories: JSON.parse(localStorage.getItem('note_categories') || '[]'),
+      notes: JSON.parse(localStorage.getItem('inspiration_notes') || '[]'),
+      color_groups: colorGroups
+    };
+    
+    const jsonString = JSON.stringify(data, null, 2);
+    try {
+      await navigator.clipboard.writeText(jsonString);
+      alert('元数据已复制到剪贴板！\n注意：此备份仅包含分类、标签、便签等文字信息，不包含图片文件本身。');
+    } catch (e) {
+      alert('复制失败，请手动复制下方内容');
+      setImportDataString(jsonString); // Show in textarea for manual copy
+    }
+  };
+
+  const handleImportData = () => {
+    try {
+      if (!importDataString.trim()) return;
+      
+      const data = JSON.parse(importDataString);
+      if (!data.version || !data.photos) throw new Error("Invalid format");
+      
+      if (confirm('导入将覆盖当前所有分类和便签设置，并合并照片记录。确定要继续吗？')) {
+        // Restore categories
+        if (data.categories) setCategories(data.categories);
+        
+        // Restore notes
+        if (data.notes) localStorage.setItem('inspiration_notes', JSON.stringify(data.notes));
+        if (data.note_categories) localStorage.setItem('note_categories', JSON.stringify(data.note_categories));
+        
+        // Restore colors
+        if (data.color_groups) setColorGroups(data.color_groups);
+        
+        // Merge photos (preserving existing blob URLs if match)
+        // Since imported photos have empty URLs, we only use them for metadata.
+        // If ID matches, we keep local blob URL but update metadata.
+        // If ID doesn't match (new photo metadata), it will show as broken until image is re-added or handled.
+        
+        const mergedPhotos = [...photos];
+        const currentIds = new Set(photos.map(p => p.id));
+        
+        data.photos.forEach((p: Photo) => {
+            if (currentIds.has(p.id)) {
+                // Update metadata of existing
+                const index = mergedPhotos.findIndex(mp => mp.id === p.id);
+                if (index !== -1) {
+                    mergedPhotos[index] = { ...p, url: mergedPhotos[index].url }; 
+                }
+            } else {
+                // Add new (will be broken image, but metadata exists)
+                mergedPhotos.push(p);
+            }
+        });
+        
+        setPhotos(mergedPhotos);
+        alert('数据导入成功！页面将刷新以应用更改。');
+        window.location.reload();
+      }
+    } catch (e) {
+      alert('导入失败：数据格式不正确');
+      console.error(e);
+    }
+  };
+
   const toggleBatchTagSelection = (tag: string) => {
       const newSet = new Set(batchSelectedTags);
       if (newSet.has(tag)) newSet.delete(tag);
@@ -952,6 +1029,7 @@ const App: React.FC = () => {
   };
 
   if (isLoading) {
+    // Only kept as fallback, mostly unreachable with new logic
     return (
       <div className="h-screen w-full flex items-center justify-center bg-gray-50 flex-col gap-4">
         <div className={`w-12 h-12 rounded-full border-4 border-slate-200 border-t-slate-900 animate-spin`}></div>
@@ -1014,8 +1092,6 @@ const App: React.FC = () => {
                       <button 
                         onClick={() => {
                             setSearchQuery(''); 
-                            // Only close search focus if clearing via button? Or keep it?
-                            // Keep it to allow re-typing, user can use back button or click away to close
                             setIsSearchFocused(true);
                         }} 
                         className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 p-1"
@@ -1186,12 +1262,17 @@ const App: React.FC = () => {
                               </div>
                           ) : (
                               <img 
-                                src={photo.url} 
+                                src={photo.url || ''} // Fallback to empty string while hydrating
                                 alt={photo.title} 
-                                className={`w-full h-full object-cover transition-transform duration-700 group-hover:scale-110`}
+                                className={`w-full h-full object-cover transition-transform duration-700 group-hover:scale-110 ${!photo.url ? 'opacity-0' : 'opacity-100'}`}
                                 loading="lazy"
                                 onError={() => handleImageError(photo.id)}
                               />
+                          )}
+                          
+                          {/* Placeholder while url is loading */}
+                          {!photo.url && !failedImages.has(photo.id) && (
+                              <div className="absolute inset-0 bg-slate-100 animate-pulse" />
                           )}
                           
                           <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300">
@@ -1378,7 +1459,7 @@ const App: React.FC = () => {
 
       {isSettingsOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm animate-fade-in" onClick={closeModal}>
-           <div className="bg-white p-8 w-full max-w-sm shadow-2xl rounded-none relative" onClick={e => e.stopPropagation()}>
+           <div className="bg-white p-8 w-full max-w-sm shadow-2xl rounded-none relative overflow-y-auto max-h-[90vh] custom-scrollbar" onClick={e => e.stopPropagation()}>
               <button onClick={closeModal} className="absolute top-4 right-4 text-slate-400 hover:text-slate-900"><X size={20}/></button>
               <h2 className="text-xl font-black text-slate-900 mb-6 uppercase tracking-tight">应用设置</h2>
               
@@ -1397,6 +1478,31 @@ const App: React.FC = () => {
               </div>
 
               <div className="mb-8">
+                 <label className="text-xs font-bold text-slate-400 uppercase tracking-widest block mb-3 flex items-center gap-2"><Database size={12}/> 数据管理</label>
+                 
+                 <div className="space-y-4">
+                     <div className="p-3 bg-slate-50 border border-slate-100">
+                        <button onClick={handleExportData} className="w-full flex items-center justify-center gap-2 py-2 bg-white border border-slate-200 text-slate-700 text-xs font-bold uppercase hover:bg-slate-50 mb-2">
+                            <Copy size={14} /> 复制备份数据
+                        </button>
+                        <p className="text-[10px] text-slate-400 leading-tight">仅包含分类、标签、便签及照片元数据。不包含图片文件本身。</p>
+                     </div>
+
+                     <div className="p-3 bg-slate-50 border border-slate-100">
+                        <textarea 
+                            value={importDataString}
+                            onChange={e => setImportDataString(e.target.value)}
+                            placeholder="在此粘贴备份数据 (JSON)..."
+                            className="w-full h-20 text-[10px] p-2 border border-slate-200 mb-2 focus:border-slate-900 outline-none resize-none font-mono"
+                        ></textarea>
+                        <button onClick={handleImportData} className="w-full flex items-center justify-center gap-2 py-2 bg-slate-900 text-white text-xs font-bold uppercase hover:bg-slate-800">
+                            <Download size={14} /> 恢复数据
+                        </button>
+                     </div>
+                 </div>
+              </div>
+
+              <div className="mb-8">
                  <label className="text-xs font-bold text-red-400 uppercase tracking-widest block mb-3">危险区域</label>
                  <button 
                     onClick={handleDeleteAllPhotos}
@@ -1408,7 +1514,7 @@ const App: React.FC = () => {
               </div>
               
               <div className="border-t border-slate-100 pt-6">
-                 <p className="text-xs text-slate-400 text-center">Version 1.2.0 (Standalone)</p>
+                 <p className="text-xs text-slate-400 text-center">Version 1.3.0</p>
               </div>
            </div>
         </div>
