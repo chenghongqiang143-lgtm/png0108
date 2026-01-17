@@ -160,8 +160,17 @@ const groupPhotosByDate = (photos: Photo[]) => {
 const generateThumbnail = (file: File): Promise<Blob> => {
   return new Promise((resolve) => {
     const img = new Image();
-    img.src = URL.createObjectURL(file);
+    const url = URL.createObjectURL(file);
+    img.src = url;
+
+    // Safety timeout to prevent hanging on corrupted images
+    const timeout = setTimeout(() => {
+        URL.revokeObjectURL(url);
+        resolve(file); // Fallback to original
+    }, 3000);
+
     img.onload = () => {
+      clearTimeout(timeout);
       const canvas = document.createElement('canvas');
       const ctx = canvas.getContext('2d');
       const MAX_SIZE = 320; // 320px thumbnail
@@ -183,16 +192,21 @@ const generateThumbnail = (file: File): Promise<Blob> => {
       if (ctx) {
           ctx.drawImage(img, 0, 0, width, height);
           canvas.toBlob((blob) => {
-            URL.revokeObjectURL(img.src);
-            resolve(blob!);
+            URL.revokeObjectURL(url);
+            if (blob) {
+                resolve(blob);
+            } else {
+                resolve(file); // Fallback if toBlob fails
+            }
           }, 'image/jpeg', 0.7);
       } else {
-          URL.revokeObjectURL(img.src);
+          URL.revokeObjectURL(url);
           resolve(file); // Fallback to original
       }
     };
     img.onerror = () => {
-        URL.revokeObjectURL(img.src);
+        clearTimeout(timeout);
+        URL.revokeObjectURL(url);
         resolve(file);
     };
   });
@@ -627,11 +641,15 @@ const App: React.FC = () => {
                 let displayUrl;
                 try {
                     const thumbBlob = await generateThumbnail(file);
-                    await saveThumbnailToDB(newPhotoId, thumbBlob);
-                    displayUrl = URL.createObjectURL(thumbBlob);
+                    // Ensure thumbBlob is not null/undefined just in case
+                    const blobToSave = thumbBlob || file;
+                    await saveThumbnailToDB(newPhotoId, blobToSave);
+                    displayUrl = URL.createObjectURL(blobToSave);
                 } catch (e) {
                     console.warn("Thumbnail failed, using original", e);
                     displayUrl = URL.createObjectURL(file);
+                    // Also attempt to save original as thumbnail entry so subsequent loads find it
+                    saveThumbnailToDB(newPhotoId, file).catch(err => console.error("Fallback save failed", err));
                 }
 
                 const title = file.name.replace(/\.[^/.]+$/, "");
@@ -1135,12 +1153,6 @@ const App: React.FC = () => {
                        <button onClick={() => { openModal('search', () => setIsSearchFocused(true)); }} className="p-2 text-slate-500 hover:bg-slate-100 rounded-full transition-colors">
                          <Search size={20} />
                        </button>
-                   </div>
-                   
-                   <div className="hidden md:flex bg-slate-100 rounded-lg p-1 items-center gap-1">
-                      <button onClick={() => setGridSize('small')} className={`p-1.5 rounded-md ${gridSize === 'small' ? 'bg-white shadow-sm text-slate-900' : 'text-slate-400'}`}><Grid3x3 size={14}/></button>
-                      <button onClick={() => setGridSize('medium')} className={`p-1.5 rounded-md ${gridSize === 'medium' ? 'bg-white shadow-sm text-slate-900' : 'text-slate-400'}`}><LayoutGrid size={14}/></button>
-                      <button onClick={() => setGridSize('large')} className={`p-1.5 rounded-md ${gridSize === 'large' ? 'bg-white shadow-sm text-slate-900' : 'text-slate-400'}`}><Square size={14}/></button>
                    </div>
                    
                    <input 

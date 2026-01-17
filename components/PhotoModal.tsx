@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Photo, Category } from '../types';
-import { X, Edit2, Folder, Trash2, ChevronLeft, ChevronRight, Heart, Pipette, ZoomIn, ZoomOut, Maximize, Info, Crop, RotateCw, FlipHorizontal, Save, Plus, RotateCcw, Tag } from 'lucide-react';
+import { X, Edit2, Folder, Trash2, ChevronLeft, ChevronRight, Heart, Pipette, ZoomIn, ZoomOut, Maximize, Info, Crop, RotateCw, FlipHorizontal, Save, Plus, RotateCcw, Tag, Loader2 } from 'lucide-react';
 import { saveImageToDB } from '../services/imageDB';
 
 interface PhotoModalProps {
@@ -56,6 +56,9 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
   const [pickedColor, setPickedColor] = useState<string | null>(null);
   const [showMobileInfo, setShowMobileInfo] = useState(false);
   const [showControls, setShowControls] = useState(true);
+  
+  // 图片加载状态
+  const [isImgLoaded, setIsImgLoaded] = useState(false);
 
   const imgRef = useRef<HTMLImageElement>(null);
   const imgContainerRef = useRef<HTMLDivElement>(null);
@@ -208,8 +211,10 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
          setActivePhoto(photo);
          prevPhotoIdRef.current = photo.id;
          resetPhysics(false);
+         setIsImgLoaded(false); // 重置加载状态
       } else {
          setActivePhoto(photo);
+         // 同一张照片（如缩略图变高清图）不重置 loaded 状态，避免闪烁
       }
     }
   }, [photo, initialEditMode]);
@@ -277,11 +282,20 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
         <div ref={imgContainerRef} className="w-full lg:w-3/4 bg-black flex items-center justify-center relative shrink-0 overflow-hidden flex-1 min-h-0 touch-none">
           
           <div ref={stageRef} className="viewport-stage relative w-full h-full flex items-center justify-center pointer-events-none">
-            <div className="relative flex items-center justify-center" style={{ transform: `rotate(${editRotation}deg) scaleX(${editFlipX})` }}>
+            <div className="relative flex items-center justify-center w-full h-full" style={{ transform: `rotate(${editRotation}deg) scaleX(${editFlipX})` }}>
+              
+              {/* Loading Placeholder */}
+              {!isImgLoaded && (
+                <div className="absolute inset-0 flex items-center justify-center z-0">
+                   <div className="w-10 h-10 border-4 border-white/20 border-t-white/80 rounded-full animate-spin"></div>
+                </div>
+              )}
+
               <img 
                 ref={imgRef} src={activePhoto.url} alt={activePhoto.title}
                 crossOrigin="anonymous"
-                className="max-w-full max-h-full object-contain pointer-events-auto no-drag"
+                onLoad={() => setIsImgLoaded(true)}
+                className={`max-w-full max-h-full object-contain pointer-events-auto no-drag transition-opacity duration-500 ease-out ${isImgLoaded ? 'opacity-100' : 'opacity-0'}`}
               />
               
               {/* 编辑模式下的辅助线 */}
