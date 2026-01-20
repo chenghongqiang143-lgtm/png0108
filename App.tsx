@@ -348,10 +348,12 @@ const App: React.FC = () => {
       // Don't set isLoading(true) to avoid blocking UI. 
       // Instead, we will progressively update the photos as they load.
       
-      const photosToHydrate = photos.filter(p => !p.url.startsWith('http') && !p.url.startsWith('blob'));
+      // FIX: Only exclude http/https remote URLs. Allow blob: URLs to be re-hydrated from DB because they expire on refresh.
+      // Also process photos with empty URLs (failed previous imports)
+      const photosToHydrate = photos.filter(p => !p.url.startsWith('http'));
       if (photosToHydrate.length === 0) return;
 
-      const BATCH_SIZE = 20; // Process in chunks to keep UI responsive
+      const BATCH_SIZE = 6; // Reduced batch size to prevent DB choke on low-end devices
       
       for (let i = 0; i < photosToHydrate.length; i += BATCH_SIZE) {
         const chunk = photosToHydrate.slice(i, i + BATCH_SIZE);
@@ -359,17 +361,24 @@ const App: React.FC = () => {
         
         await Promise.all(chunk.map(async (photo) => {
              try {
+                // Try thumb first
                 let blob = await getThumbnailFromDB(photo.id);
+                // Fallback to full image
                 if (!blob) blob = await getImageFromDB(photo.id);
+                
                 if (blob) {
                     updates[photo.id] = URL.createObjectURL(blob);
+                } else {
+                    console.warn(`Could not find image or thumbnail for ${photo.id}`);
                 }
              } catch (e) {
-                console.error("Hydration fail", photo.id);
+                console.error("Hydration fail", photo.id, e);
              }
         }));
 
-        setPhotos(prev => prev.map(p => updates[p.id] ? { ...p, url: updates[p.id] } : p));
+        if (Object.keys(updates).length > 0) {
+            setPhotos(prev => prev.map(p => updates[p.id] ? { ...p, url: updates[p.id] } : p));
+        }
         // Small delay to yield to main thread
         await new Promise(resolve => setTimeout(resolve, 10));
       }
@@ -377,12 +386,10 @@ const App: React.FC = () => {
 
     hydratePhotos();
     
-    // Cleanup blobs on unmount
-    return () => {
-        photos.forEach(p => {
-            if (p.url.startsWith('blob:')) URL.revokeObjectURL(p.url);
-        });
-    };
+    // NOTE: We do NOT revoke object URLs on unmount here anymore to prevent 
+    // race conditions where valid URLs are revoked during strict mode double-mounts
+    // or rapid re-renders, causing images to disappear. 
+    // Browsers will clean up when the page is closed/refreshed.
   }, []); // Run once on mount
   
   // Lazy load full quality image when modal opens
@@ -1220,14 +1227,14 @@ const App: React.FC = () => {
             )}
 
             {isSelectionMode && (
-              <div className={`sticky top-0 z-20 mb-4 text-white p-3 shadow-md flex justify-between items-center rounded-none animate-in slide-in-from-top-2 ${themeColor === 'zinc' ? 'bg-slate-900' : `bg-${themeColor}-600`}`}>
-                 <div className="flex items-center gap-4">
+              <div className={`sticky top-0 z-20 mb-4 text-white p-3 shadow-md flex flex-wrap gap-y-2 justify-between items-center rounded-none animate-in slide-in-from-top-2 ${themeColor === 'zinc' ? 'bg-slate-900' : `bg-${themeColor}-600`}`}>
+                 <div className="flex items-center gap-4 shrink-0">
                     <span className="font-bold text-sm ml-2">已选 {selectedIds.size} 项</span>
                     <button onClick={handleSelectAll} className="text-xs border border-white/30 px-2 py-1 hover:bg-white/10 rounded-sm">
                        {selectedIds.size === filteredPhotos.length ? '取消全选' : '全选'}
                     </button>
                  </div>
-                 <div className="flex gap-2">
+                 <div className="flex gap-2 shrink-0 ml-auto">
                     <button onClick={handleBatchMove} disabled={selectedIds.size === 0} className="p-2 hover:bg-white/20 rounded-sm" title="移动"><Folder size={18}/></button>
                     <button onClick={handleBatchTag} disabled={selectedIds.size === 0} className="p-2 hover:bg-white/20 rounded-sm" title="标签"><Tag size={18}/></button>
                     <button onClick={handleBatchRename} disabled={selectedIds.size === 0} className="p-2 hover:bg-white/20 rounded-sm" title="重命名"><Edit2 size={18}/></button>
