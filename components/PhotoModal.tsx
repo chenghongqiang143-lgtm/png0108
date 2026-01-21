@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useRef } from 'react';
 import { Photo, Category } from '../types';
 import { X, Edit2, Folder, Trash2, ChevronLeft, ChevronRight, Heart, Pipette, ZoomIn, ZoomOut, Maximize, Info, Crop, RotateCw, FlipHorizontal, Save, Plus, RotateCcw, Tag, Loader2 } from 'lucide-react';
@@ -16,7 +17,7 @@ interface PhotoModalProps {
   onPrev?: () => void;
   hasNext?: boolean;
   hasPrev?: boolean;
-  onCollectColor?: (hex: string) => void;
+  onCollectColor?: (hex: string, name: string) => void;
 }
 
 const hexToRgb = (hex: string) => {
@@ -26,6 +27,53 @@ const hexToRgb = (hex: string) => {
     g: parseInt(result[2], 16),
     b: parseInt(result[3], 16)
   } : { r: 0, g: 0, b: 0 };
+};
+
+// --- Color Matching Helpers ---
+
+const CHINESE_COLOR_NAMES = [
+  { name: '杏仁白', hex: '#FFDFC4' }, { name: '米色', hex: '#F0D5BE' },
+  { name: '浅肉色', hex: '#EECEB3' }, { name: '肉粉', hex: '#E1B899' },
+  { name: '麦色', hex: '#E5C298' },
+  { name: '墨黑', hex: '#0F0F0F' }, { name: '线条黑', hex: '#1A1A1A' },
+  { name: '阴影灰', hex: '#808080' }, { name: '网点灰', hex: '#D3D3D3' },
+  { name: '稿纸白', hex: '#F5F5F5' }, { name: '高光白', hex: '#FFFFFF' },
+  { name: '雾霾蓝', hex: '#93A2BA' }, { name: '干枯玫瑰', hex: '#C099A0' },
+  { name: '燕麦色', hex: '#D1CBC1' }, { name: '豆沙绿', hex: '#9EAA96' },
+  { name: '烟灰粉', hex: '#D8B8B0' }, { name: '静谧灰', hex: '#A8A6A2' },
+  { name: '胶片黄', hex: '#E3C176' }, { name: '复古红', hex: '#8B3A3A' },
+  { name: '午夜蓝', hex: '#191970' }, { name: '森林绿', hex: '#228B22' },
+  { name: '怀旧褐', hex: '#A0522D' }, { name: '暖白', hex: '#FDF5E6' },
+  { name: '朱砂', hex: '#ff461f' }, { name: '天青', hex: '#b5cefc' },
+  { name: '竹青', hex: '#789262' }, { name: '鹅黄', hex: '#fff143' },
+  { name: '黛蓝', hex: '#415065' }, { name: '胭脂', hex: '#9d2933' },
+  { name: '红色', hex: '#EF4444' }, { name: '橙色', hex: '#F97316' },
+  { name: '黄色', hex: '#EAB308' }, { name: '绿色', hex: '#22C55E' },
+  { name: '蓝色', hex: '#3B82F6' }, { name: '黑色', hex: '#000000' }
+];
+
+const getDistance = (rgb1: {r:number, g:number, b:number}, rgb2: {r:number, g:number, b:number}) => {
+  return Math.sqrt(
+    Math.pow(rgb1.r - rgb2.r, 2) +
+    Math.pow(rgb1.g - rgb2.g, 2) +
+    Math.pow(rgb1.b - rgb2.b, 2)
+  );
+};
+
+const findNearestColorName = (hex: string) => {
+  const targetRgb = hexToRgb(hex);
+  let minDistance = Infinity;
+  let nearestName = '自定义色';
+  
+  for (const color of CHINESE_COLOR_NAMES) {
+    const currentRgb = hexToRgb(color.hex);
+    const dist = getDistance(targetRgb, currentRgb);
+    if (dist < minDistance) {
+      minDistance = dist;
+      nearestName = color.name;
+    }
+  }
+  return nearestName;
 };
 
 export const PhotoModal: React.FC<PhotoModalProps> = ({
@@ -54,6 +102,7 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
   const [isDeleteConfirm, setIsDeleteConfirm] = useState(false);
   const [isPickerActive, setIsPickerActive] = useState(false);
   const [pickedColor, setPickedColor] = useState<string | null>(null);
+  const [pickedColorName, setPickedColorName] = useState<string>('');
   const [showMobileInfo, setShowMobileInfo] = useState(false);
   const [showControls, setShowControls] = useState(true);
   
@@ -112,6 +161,7 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
       const pixel = ctx.getImageData(0, 0, 1, 1).data;
       const hex = "#" + ((1 << 24) + (pixel[0] << 16) + (pixel[1] << 8) + pixel[2]).toString(16).slice(1).toUpperCase();
       setPickedColor(hex);
+      setPickedColorName(findNearestColorName(hex));
     } catch (e) {
       console.warn("Color pick failed", e);
     }
@@ -204,6 +254,7 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
          setViewMode(initialEditMode ? 'meta-edit' : 'view');
          setIsPickerActive(false);
          setPickedColor(null);
+         setPickedColorName('');
          setEditRotation(0);
          setEditFlipX(1);
          setCropModeActive(false);
@@ -263,6 +314,11 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
       setIsProcessing(false);
       alert("保存失败");
     }
+  };
+
+  const getSuggestedTags = () => {
+    if (!newTag && availableTags.length > 0) return availableTags.filter(t => !activePhoto.tags.includes(t)).slice(0, 8);
+    return availableTags.filter(t => t.includes(newTag) && !activePhoto.tags.includes(t)).slice(0, 8);
   };
 
   return (
@@ -326,14 +382,12 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
              >
                 <div className="w-8 h-8 rounded-full border border-slate-200 shadow-inner" style={{backgroundColor: pickedColor}}></div>
                 <div className="flex flex-col min-w-[80px]">
-                  <span className="font-mono font-black text-sm text-slate-900 leading-none">{pickedColor}</span>
-                  <span className="font-mono text-[10px] text-slate-500 uppercase mt-1">
-                    {(() => { const rgb = hexToRgb(pickedColor); return `RGB ${rgb.r},${rgb.g},${rgb.b}`; })()}
-                  </span>
+                  <span className="font-bold text-sm text-slate-900 leading-none">{pickedColorName || '自定义色'}</span>
+                  <span className="font-mono text-[10px] text-slate-500 uppercase mt-1">{pickedColor}</span>
                 </div>
                 <button 
                     onPointerDown={e => e.stopPropagation()}
-                    onClick={() => onCollectColor?.(pickedColor)}
+                    onClick={() => onCollectColor?.(pickedColor, pickedColorName)}
                     className="ui-btn p-2 bg-slate-900 text-white rounded-full"
                 >
                     <Plus size={16} />
@@ -390,7 +444,7 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
               <button onPointerDown={e => e.stopPropagation()} onClick={() => setEditRotation(prev => (Math.floor(prev/90)*90 + 90) % 360)} className="ui-btn flex flex-col items-center gap-1 text-white/70 hover:text-white"><RotateCw size={22} /><span className="text-[10px]">90°</span></button>
               <button onPointerDown={e => e.stopPropagation()} onClick={() => setEditFlipX(prev => prev * -1)} className="ui-btn flex flex-col items-center gap-1 text-white/70 hover:text-white"><FlipHorizontal size={22} /><span className="text-[10px]">翻转</span></button>
               <button onPointerDown={e => e.stopPropagation()} onClick={() => setCropModeActive(!cropModeActive)} className={`ui-btn flex flex-col items-center gap-1 ${cropModeActive ? 'text-blue-400' : 'text-white/70'}`}><Maximize size={22} /><span className="text-[10px]">裁切网格</span></button>
-              <button onPointerDown={e => e.stopPropagation()} onClick={() => { setIsPickerActive(!isPickerActive); setPickedColor(null); }} className={`ui-btn flex flex-col items-center gap-1 ${isPickerActive ? 'text-blue-400' : 'text-white/70 hover:text-white'}`}><Pipette size={22} /><span className="text-[10px]">取色</span></button>
+              <button onPointerDown={e => e.stopPropagation()} onClick={() => { setIsPickerActive(!isPickerActive); setPickedColor(null); setPickedColorName(''); }} className={`ui-btn flex flex-col items-center gap-1 ${isPickerActive ? 'text-blue-400' : 'text-white/70 hover:text-white'}`}><Pipette size={22} /><span className="text-[10px]">取色</span></button>
             </div>
             
             <div className="flex gap-3">
@@ -465,6 +519,21 @@ export const PhotoModal: React.FC<PhotoModalProps> = ({
                       placeholder="+ 标签" 
                       className="text-[10px] font-bold border-none outline-none bg-transparent w-20"
                     />
+                  </div>
+                  {/* Recommended Tags List */}
+                  <div className="flex flex-wrap gap-1.5 mt-2">
+                    {getSuggestedTags().map(t => (
+                        <button
+                            key={t}
+                            onClick={() => {
+                                onUpdate({ ...activePhoto, tags: [...new Set([...activePhoto.tags, t])] });
+                                setNewTag('');
+                            }}
+                            className="ui-btn px-2 py-1 bg-gray-50 text-[10px] text-gray-400 hover:bg-gray-100 hover:text-gray-600 rounded-sm border border-transparent hover:border-gray-200 transition-all"
+                        >
+                            + {t}
+                        </button>
+                    ))}
                   </div>
                 </div>
               </div>

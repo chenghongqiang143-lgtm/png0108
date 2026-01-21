@@ -1,5 +1,6 @@
+
 import React, { useState, useMemo, useRef, useEffect } from 'react';
-import { Check, Plus, Trash2, Palette, Edit3, X, Edit2 } from 'lucide-react';
+import { Check, Plus, Trash2, Palette, Edit3, X, Edit2, CheckSquare, FolderInput, Folder } from 'lucide-react';
 import { ColorGroup, ColorItem } from '../types';
 
 // --- Helper Functions ---
@@ -94,6 +95,11 @@ export const ColorTool: React.FC<ColorToolProps> = ({ groups, onUpdateGroups }) 
   const longPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isLongPress = useRef(false);
 
+  // --- Multi-Selection States ---
+  const [isSelectionMode, setIsSelectionMode] = useState(false);
+  const [selectedColorIds, setSelectedColorIds] = useState<Set<string>>(new Set());
+  const [isMoveModalOpen, setIsMoveModalOpen] = useState(false);
+
   // Derived values
   const rgb = useMemo(() => hexToRgb(selectedColor), [selectedColor]);
   const hsv = useMemo(() => rgbToHsv(rgb.r, rgb.g, rgb.b), [rgb]);
@@ -105,10 +111,17 @@ export const ColorTool: React.FC<ColorToolProps> = ({ groups, onUpdateGroups }) 
       if (isAddingGroup && modalKey !== 'color-add-group') {
         setIsAddingGroup(false);
       }
+      if (isSelectionMode && modalKey !== 'color-selection') {
+        setIsSelectionMode(false);
+        setSelectedColorIds(new Set());
+      }
+      if (isMoveModalOpen && modalKey !== 'color-move') {
+        setIsMoveModalOpen(false);
+      }
     };
     window.addEventListener('popstate', handlePopState);
     return () => window.removeEventListener('popstate', handlePopState);
-  }, [isAddingGroup]);
+  }, [isAddingGroup, isSelectionMode, isMoveModalOpen]);
 
   const openAddGroup = () => {
     window.history.pushState({ modal: 'color-add-group' }, '', window.location.href);
@@ -116,6 +129,26 @@ export const ColorTool: React.FC<ColorToolProps> = ({ groups, onUpdateGroups }) 
   };
   
   const closeAddGroup = () => {
+    window.history.back();
+  };
+
+  const enterSelectionMode = () => {
+    window.history.pushState({ modal: 'color-selection' }, '', window.location.href);
+    setIsSelectionMode(true);
+  };
+
+  const exitSelectionMode = () => {
+    // If move modal is open, closing it will trigger popstate, which might need handling order
+    // But typically we close modal first.
+    window.history.back();
+  };
+
+  const openMoveModal = () => {
+    window.history.pushState({ modal: 'color-move' }, '', window.location.href);
+    setIsMoveModalOpen(true);
+  };
+
+  const closeMoveModal = () => {
     window.history.back();
   };
 
@@ -171,8 +204,19 @@ export const ColorTool: React.FC<ColorToolProps> = ({ groups, onUpdateGroups }) 
 
   const handleColorClick = (color: ColorItem) => {
     if (isLongPress.current) return;
-    setSelectedColor(color.hex);
-    setSelectedName(color.name);
+    
+    if (isSelectionMode) {
+      const newSet = new Set(selectedColorIds);
+      if (newSet.has(color.id)) {
+        newSet.delete(color.id);
+      } else {
+        newSet.add(color.id);
+      }
+      setSelectedColorIds(newSet);
+    } else {
+      setSelectedColor(color.hex);
+      setSelectedName(color.name);
+    }
   };
 
   const handleHexInputSubmit = () => {
@@ -191,9 +235,18 @@ export const ColorTool: React.FC<ColorToolProps> = ({ groups, onUpdateGroups }) 
   // --- Long Press Logic ---
   const startPress = (groupId: string, color: ColorItem) => {
     isLongPress.current = false;
+    
+    // If already in selection mode, don't trigger anything special on long press, just let click handle it
+    if (isSelectionMode) return;
+
     longPressTimer.current = setTimeout(() => {
       isLongPress.current = true;
-      setContextMenuColor({ groupId, colorId: color.id, name: color.name, hex: color.hex });
+      // Use selection mode instead of context menu for long press now
+      enterSelectionMode();
+      setSelectedColorIds(new Set([color.id]));
+      if (navigator.vibrate) navigator.vibrate(50);
+      
+      // OLD Logic: setContextMenuColor({ groupId, colorId: color.id, name: color.name, hex: color.hex });
     }, 600);
   };
 
@@ -204,42 +257,56 @@ export const ColorTool: React.FC<ColorToolProps> = ({ groups, onUpdateGroups }) 
     }
   };
 
-  // --- Color Context Actions ---
-  const handleDeleteColor = () => {
-    if (!contextMenuColor) return;
-    if (confirm(`删除颜色 ${contextMenuColor.name}?`)) {
-      onUpdateGroups(groups.map(g => {
-        if (g.id === contextMenuColor.groupId) {
-          return { ...g, colors: g.colors.filter(c => c.id !== contextMenuColor.colorId) };
-        }
-        return g;
-      }));
+  // --- Batch Actions ---
+  const handleBatchDelete = () => {
+    if (selectedColorIds.size === 0) return;
+    if (confirm(`确定删除选中的 ${selectedColorIds.size} 个颜色吗？`)) {
+        const newGroups = groups.map(g => ({
+            ...g,
+            colors: g.colors.filter(c => !selectedColorIds.has(c.id))
+        }));
+        onUpdateGroups(newGroups);
+        setSelectedColorIds(new Set());
+        exitSelectionMode();
     }
-    setContextMenuColor(null);
   };
 
-  const handleEditColor = () => {
-    if (!contextMenuColor) return;
-    const newName = prompt("修改颜色名称", contextMenuColor.name);
-    const newHex = prompt("修改颜色HEX值", contextMenuColor.hex);
+  const handleBatchMove = (targetGroupId: string) => {
+      if (selectedColorIds.size === 0) return;
+      
+      // Find all selected colors across all groups
+      const selectedColors: ColorItem[] = [];
+      groups.forEach(g => {
+          g.colors.forEach(c => {
+              if (selectedColorIds.has(c.id)) {
+                  selectedColors.push(c);
+              }
+          });
+      });
 
-    if (newName && newHex && /^#[0-9A-F]{6}$/i.test(newHex)) {
-       onUpdateGroups(groups.map(g => {
-        if (g.id === contextMenuColor.groupId) {
-          return { ...g, colors: g.colors.map(c => c.id === contextMenuColor.colorId ? { ...c, name: newName, hex: newHex } : c) };
-        }
-        return g;
+      // 1. Remove from source groups
+      const cleanGroups = groups.map(g => ({
+          ...g,
+          colors: g.colors.filter(c => !selectedColorIds.has(c.id))
       }));
-      // Update display if selected
-      if (selectedColor === contextMenuColor.hex) {
-        setSelectedColor(newHex);
-        setSelectedName(newName);
-      }
-    } else if (newHex && !/^#[0-9A-F]{6}$/i.test(newHex)) {
-      alert("无效的HEX代码");
-    }
-    setContextMenuColor(null);
+
+      // 2. Add to target group
+      const finalGroups = cleanGroups.map(g => {
+          if (g.id === targetGroupId) {
+              return { ...g, colors: [...g.colors, ...selectedColors] };
+          }
+          return g;
+      });
+
+      onUpdateGroups(finalGroups);
+      setSelectedColorIds(new Set());
+      closeMoveModal();
+      exitSelectionMode();
   };
+
+  // --- Color Context Actions (Legacy single edit via long press if needed, but we use batch now) ---
+  // We keep this for individual Edit if user clicks edit in selection mode when only 1 is selected?
+  // Or simplifying: Removing old context menu in favor of selection mode actions.
 
   return (
     <div className="flex flex-col md:flex-row h-full bg-gray-50 overflow-hidden font-sans">
@@ -304,18 +371,30 @@ export const ColorTool: React.FC<ColorToolProps> = ({ groups, onUpdateGroups }) 
 
       {/* RIGHT: Library Panel - Unified Scrolling */}
       <div className="w-full md:w-7/12 h-3/5 md:h-full bg-white overflow-y-auto relative custom-scrollbar flex flex-col">
-        <div className="p-4 md:p-10 pb-safe">
+        <div className="p-4 md:p-10 pb-24 md:pb-safe">
             <div className="flex justify-between items-center mb-8 py-2">
             <h3 className="text-xl font-black text-gray-900 flex items-center gap-2 uppercase tracking-wide whitespace-nowrap">
                 <Palette size={20} className="text-gray-900" />
                 色彩库
             </h3>
-            <button 
-                onClick={openAddGroup}
-                className="flex items-center gap-1 text-xs bg-slate-100 hover:bg-slate-200 text-gray-900 px-4 py-2 transition-colors font-bold uppercase tracking-wider rounded-none whitespace-nowrap"
-            >
-                <Plus size={14} /> 新建色彩组
-            </button>
+            
+            {isSelectionMode ? (
+                <div className="flex gap-2">
+                    <button onClick={() => {
+                        const allIds = new Set<string>();
+                        groups.forEach(g => g.colors.forEach(c => allIds.add(c.id)));
+                        setSelectedColorIds(allIds);
+                    }} className="text-xs bg-gray-100 hover:bg-gray-200 px-3 py-1 font-bold uppercase rounded-sm">全选</button>
+                    <button onClick={exitSelectionMode} className="text-xs bg-gray-100 hover:bg-gray-200 px-3 py-1 font-bold uppercase rounded-sm">取消</button>
+                </div>
+            ) : (
+                <button 
+                    onClick={openAddGroup}
+                    className="flex items-center gap-1 text-xs bg-slate-100 hover:bg-slate-200 text-gray-900 px-4 py-2 transition-colors font-bold uppercase tracking-wider rounded-none whitespace-nowrap"
+                >
+                    <Plus size={14} /> 新建色彩组
+                </button>
+            )}
             </div>
             
             {/* Create Group Form */}
@@ -343,22 +422,24 @@ export const ColorTool: React.FC<ColorToolProps> = ({ groups, onUpdateGroups }) 
                 <div key={group.id} className="relative group/container">
                 <div className="flex items-center justify-between mb-3 border-b border-gray-100 pb-2">
                     <h4 className="text-xs font-black text-gray-400 uppercase tracking-widest">{group.name}</h4>
-                    <div className="flex items-center gap-2">
-                    <button 
-                        onClick={() => setAddingColorToGroupId(group.id)}
-                        className="text-[10px] flex items-center gap-1 text-gray-500 hover:text-black font-bold uppercase tracking-wider whitespace-nowrap"
-                    >
-                        <Plus size={10} /> 添加颜色
-                    </button>
-                    {group.isCustom && (
+                    {!isSelectionMode && (
+                        <div className="flex items-center gap-2">
                         <button 
-                        onClick={() => handleDeleteGroup(group.id)}
-                        className="text-xs text-red-300 hover:text-red-600 p-1 transition-colors"
+                            onClick={() => setAddingColorToGroupId(group.id)}
+                            className="text-[10px] flex items-center gap-1 text-gray-500 hover:text-black font-bold uppercase tracking-wider whitespace-nowrap"
                         >
-                        <Trash2 size={12} />
+                            <Plus size={10} /> 添加颜色
                         </button>
+                        {group.isCustom && (
+                            <button 
+                            onClick={() => handleDeleteGroup(group.id)}
+                            className="text-xs text-red-300 hover:text-red-600 p-1 transition-colors"
+                            >
+                            <Trash2 size={12} />
+                            </button>
+                        )}
+                        </div>
                     )}
-                    </div>
                 </div>
 
                 {/* Add Color Form for this group */}
@@ -392,19 +473,33 @@ export const ColorTool: React.FC<ColorToolProps> = ({ groups, onUpdateGroups }) 
                     <div className="text-xs text-gray-300 italic py-4 border border-dashed border-gray-200 text-center rounded-none whitespace-nowrap">暂无颜色</div>
                 ) : (
                     <div className="grid grid-cols-6 sm:grid-cols-8 md:grid-cols-6 lg:grid-cols-8 xl:grid-cols-10 gap-2">
-                    {group.colors.map((color) => (
-                        <div key={color.id} className="group relative">
-                        <button
-                            onPointerDown={() => startPress(group.id, color)}
-                            onPointerUp={() => { cancelPress(); handleColorClick(color); }}
-                            onPointerLeave={cancelPress}
-                            onContextMenu={(e) => e.preventDefault()}
-                            className={`w-full aspect-square shadow-sm hover:shadow-lg transition-all duration-200 ring-2 ring-offset-2 ${selectedColor === color.hex ? 'ring-black z-10 scale-105' : 'ring-transparent hover:scale-110 hover:z-10'} rounded-none`}
-                            style={{ backgroundColor: color.hex }}
-                            title={color.name}
-                        />
-                        </div>
-                    ))}
+                    {group.colors.map((color) => {
+                        const isSelected = selectedColorIds.has(color.id);
+                        return (
+                            <div key={color.id} className="group relative">
+                                <button
+                                    onPointerDown={() => startPress(group.id, color)}
+                                    onPointerUp={() => { cancelPress(); handleColorClick(color); }}
+                                    onPointerLeave={cancelPress}
+                                    onContextMenu={(e) => e.preventDefault()}
+                                    className={`w-full aspect-square shadow-sm transition-all duration-200 ring-offset-2 relative
+                                        ${isSelectionMode && isSelected ? 'ring-2 ring-slate-900 z-10' : 'ring-transparent'}
+                                        ${!isSelectionMode && selectedColor === color.hex ? 'ring-2 ring-black z-10 scale-105' : ''}
+                                        ${!isSelectionMode && 'hover:scale-110 hover:z-10 hover:shadow-lg'}
+                                        rounded-none
+                                    `}
+                                    style={{ backgroundColor: color.hex }}
+                                    title={color.name}
+                                >
+                                    {isSelectionMode && (
+                                        <div className={`absolute inset-0 flex items-center justify-center ${isSelected ? 'bg-black/20' : ''}`}>
+                                            {isSelected && <Check size={16} className="text-white drop-shadow-md" />}
+                                        </div>
+                                    )}
+                                </button>
+                            </div>
+                        );
+                    })}
                     </div>
                 )}
                 </div>
@@ -413,38 +508,60 @@ export const ColorTool: React.FC<ColorToolProps> = ({ groups, onUpdateGroups }) 
         </div>
       </div>
       
-      {/* Context Menu for Color */}
-      {contextMenuColor && (
-        <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
-           <div className="bg-white w-full max-w-xs shadow-2xl p-0 animate-fade-in rounded-none border border-gray-200">
-             <div className="flex items-center gap-4 p-5 border-b border-gray-100 bg-gray-50">
-                <div className="w-10 h-10 shadow-sm border border-gray-200 rounded-none" style={{ backgroundColor: contextMenuColor.hex }}></div>
-                <div>
-                   <h3 className="text-base font-bold text-gray-900">{contextMenuColor.name}</h3>
-                   <p className="text-xs text-gray-400 font-mono uppercase tracking-wider">{contextMenuColor.hex}</p>
+      {/* Selection Action Bar */}
+      {isSelectionMode && (
+          <div className="absolute bottom-4 left-1/2 -translate-x-1/2 w-auto min-w-[300px] max-w-[90%] bg-slate-900 text-white px-6 py-3 shadow-2xl flex items-center justify-between gap-6 animate-in slide-in-from-bottom-4 rounded-none z-[60]">
+              <span className="text-xs font-bold whitespace-nowrap">已选 {selectedColorIds.size} 项</span>
+              <div className="flex items-center gap-3">
+                  <button 
+                      onClick={openMoveModal} 
+                      disabled={selectedColorIds.size === 0} 
+                      className="flex items-center gap-1.5 p-2 hover:bg-white/10 rounded-sm disabled:opacity-50 transition-colors text-xs font-bold uppercase"
+                  >
+                      <FolderInput size={16} /> <span className="hidden sm:inline">移动</span>
+                  </button>
+                  <div className="h-4 w-px bg-white/20"></div>
+                  <button 
+                      onClick={handleBatchDelete} 
+                      disabled={selectedColorIds.size === 0} 
+                      className="flex items-center gap-1.5 p-2 hover:bg-red-500/20 text-red-300 hover:text-red-200 rounded-sm disabled:opacity-50 transition-colors text-xs font-bold uppercase"
+                  >
+                      <Trash2 size={16} /> <span className="hidden sm:inline">删除</span>
+                  </button>
+                  <button onClick={exitSelectionMode} className="ml-2 p-1 hover:bg-white/20 rounded-full"><X size={16}/></button>
+              </div>
+          </div>
+      )}
+
+      {/* Move Modal */}
+      {isMoveModalOpen && (
+          <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/60 backdrop-blur-sm animate-in fade-in" onClick={closeMoveModal}>
+            <div className="bg-white w-full max-w-sm p-6 m-4 shadow-2xl rounded-none animate-in zoom-in-95 duration-200" onClick={e => e.stopPropagation()}>
+                <div className="flex justify-between items-center mb-6">
+                    <h3 className="text-lg font-black text-slate-900 uppercase tracking-tight">移动到分组</h3>
+                    <button onClick={closeMoveModal} className="text-slate-400 hover:text-slate-900"><X size={20}/></button>
                 </div>
-             </div>
-             <div className="flex flex-col">
-               <button 
-                 onClick={handleEditColor}
-                 className="flex items-center justify-center gap-2 bg-white text-gray-700 py-4 font-bold text-xs uppercase tracking-wider hover:bg-gray-50 transition-colors border-b border-gray-100 rounded-none whitespace-nowrap"
-               >
-                 <Edit2 size={14} /> 编辑颜色
-               </button>
-               <button 
-                 onClick={handleDeleteColor}
-                 className="flex items-center justify-center gap-2 bg-white text-red-600 py-4 font-bold text-xs uppercase tracking-wider hover:bg-red-50 transition-colors border-b border-gray-100 rounded-none whitespace-nowrap"
-               >
-                 <Trash2 size={14} /> 删除颜色
-               </button>
-               <button 
-                 onClick={() => setContextMenuColor(null)}
-                 className="py-4 text-gray-400 hover:text-gray-900 font-bold text-xs uppercase tracking-wider bg-white rounded-none whitespace-nowrap"
-               >
-                 取消
-               </button>
-             </div>
-           </div>
+                
+                <div className="grid grid-cols-2 gap-3 max-h-[50vh] overflow-y-auto custom-scrollbar p-1">
+                    {groups.map(group => (
+                        <button 
+                            key={group.id}
+                            onClick={() => handleBatchMove(group.id)}
+                            className="flex flex-col items-center justify-center gap-2 p-4 bg-white border border-slate-200 hover:border-slate-900 hover:shadow-md transition-all rounded-none min-h-[80px]"
+                        >
+                            <Folder size={24} className="text-slate-700" />
+                            <span className="text-xs font-bold text-slate-900 text-center truncate w-full">{group.name}</span>
+                        </button>
+                    ))}
+                    <button 
+                        onClick={() => { closeMoveModal(); openAddGroup(); }}
+                        className="flex flex-col items-center justify-center gap-2 p-4 bg-slate-50 border-2 border-dashed border-slate-300 hover:border-slate-900 hover:bg-slate-100 transition-all rounded-none min-h-[80px]"
+                    >
+                        <Plus size={24} className="text-slate-400" />
+                        <span className="text-xs font-bold text-slate-600">新建分组</span>
+                    </button>
+                </div>
+            </div>
         </div>
       )}
 

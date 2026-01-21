@@ -1,7 +1,6 @@
-
 import React, { useState, useRef, useEffect } from 'react';
 import { Note, NoteCategory } from '../types';
-import { Bold, Highlighter, Image as ImageIcon, CheckSquare, Plus, Trash2, ArrowLeft, Save, StickyNote, FolderPlus, Edit2, Heading1, Heading2, Heading3, Check, X } from 'lucide-react';
+import { Bold, Highlighter, Image as ImageIcon, CheckSquare, Plus, Trash2, ArrowLeft, Save, StickyNote, FolderPlus, Edit2, Heading1, Heading2, Heading3, Check, X, FolderInput, Folder } from 'lucide-react';
 
 const DEFAULT_CATEGORIES: NoteCategory[] = [
   { id: 'all', name: '全部' },
@@ -9,6 +8,24 @@ const DEFAULT_CATEGORIES: NoteCategory[] = [
   { id: 'todo', name: '待办' },
   { id: 'archive', name: '归档' }
 ];
+
+interface ToolButtonProps {
+  onClick: () => void;
+  icon: React.ReactNode;
+  title: string;
+}
+
+const ToolButton: React.FC<ToolButtonProps> = ({ onClick, icon, title }) => (
+  <button
+    type="button"
+    onMouseDown={(e) => e.preventDefault()}
+    onClick={onClick}
+    className="p-2 text-slate-600 hover:text-slate-900 hover:bg-white rounded-sm transition-colors"
+    title={title}
+  >
+    {icon}
+  </button>
+);
 
 export const NoteTool: React.FC = () => {
   // State
@@ -28,6 +45,7 @@ export const NoteTool: React.FC = () => {
   // Selection Mode State
   const [isSelectionMode, setIsSelectionMode] = useState(false);
   const [selectedNoteIds, setSelectedNoteIds] = useState<Set<string>>(new Set());
+  const [isMoveModalOpen, setIsMoveModalOpen] = useState(false);
 
   // Edit State
   const [editContent, setEditContent] = useState('');
@@ -63,10 +81,13 @@ export const NoteTool: React.FC = () => {
         setIsSelectionMode(false);
         setSelectedNoteIds(new Set());
       }
+      if (isMoveModalOpen && modalKey !== 'note-move') {
+        setIsMoveModalOpen(false);
+      }
     };
     window.addEventListener('popstate', handlePopState);
     return () => window.removeEventListener('popstate', handlePopState);
-  }, [selectedNoteId, isSelectionMode]);
+  }, [selectedNoteId, isSelectionMode, isMoveModalOpen]);
 
   const openNoteEditor = (noteId: string) => {
      window.history.pushState({ modal: 'note-editor' }, '', window.location.href);
@@ -83,6 +104,17 @@ export const NoteTool: React.FC = () => {
   };
 
   const exitSelectionMode = () => {
+    // If move modal is open, we need to close it first if history stack is involved, 
+    // but typically we close modal then exit selection.
+    window.history.back();
+  };
+
+  const openMoveModal = () => {
+    window.history.pushState({ modal: 'note-move' }, '', window.location.href);
+    setIsMoveModalOpen(true);
+  };
+
+  const closeMoveModal = () => {
     window.history.back();
   };
 
@@ -145,6 +177,20 @@ export const NoteTool: React.FC = () => {
           setNotes(prev => prev.filter(n => !selectedNoteIds.has(n.id)));
           exitSelectionMode();
       }
+  };
+
+  const handleBatchMove = (targetCategoryId: string) => {
+      if (selectedNoteIds.size === 0) return;
+      
+      setNotes(prev => prev.map(n => {
+          if (selectedNoteIds.has(n.id)) {
+              return { ...n, categoryId: targetCategoryId, updatedAt: Date.now() };
+          }
+          return n;
+      }));
+
+      closeMoveModal();
+      exitSelectionMode();
   };
 
   const handleSave = () => {
@@ -576,14 +622,55 @@ export const NoteTool: React.FC = () => {
       
       {/* Batch Action Bar */}
       {isSelectionMode && (
-          <div className="absolute bottom-4 left-1/2 -translate-x-1/2 bg-slate-900 text-white px-6 py-3 shadow-xl flex items-center gap-6 animate-in slide-in-from-bottom-4 rounded-none z-20">
+          <div className="absolute bottom-4 left-1/2 -translate-x-1/2 w-auto min-w-[300px] max-w-[90%] bg-slate-900 text-white px-6 py-3 shadow-xl flex items-center justify-between gap-6 animate-in slide-in-from-bottom-4 rounded-none z-20">
               <span className="text-xs font-bold whitespace-nowrap">已选 {selectedNoteIds.size} 项</span>
-              <div className="h-4 w-px bg-white/20"></div>
-              <button onClick={handleBatchDelete} disabled={selectedNoteIds.size === 0} className="flex items-center gap-2 text-red-400 hover:text-red-300 font-bold text-xs uppercase tracking-wider disabled:opacity-50">
-                  <Trash2 size={16} /> 删除
-              </button>
-              <button onClick={exitSelectionMode} className="p-1 hover:bg-white/20 rounded-full"><X size={16}/></button>
+              <div className="flex items-center gap-3">
+                  <button 
+                      onClick={openMoveModal}
+                      disabled={selectedNoteIds.size === 0} 
+                      className="flex items-center gap-2 hover:bg-white/10 p-2 rounded-sm disabled:opacity-50 transition-colors text-xs font-bold uppercase"
+                  >
+                      <FolderInput size={16} /> 移动
+                  </button>
+                  <div className="h-4 w-px bg-white/20"></div>
+                  <button onClick={handleBatchDelete} disabled={selectedNoteIds.size === 0} className="flex items-center gap-2 text-red-400 hover:text-red-300 p-2 rounded-sm disabled:opacity-50 font-bold text-xs uppercase tracking-wider">
+                      <Trash2 size={16} /> 删除
+                  </button>
+                  <button onClick={exitSelectionMode} className="ml-2 p-1 hover:bg-white/20 rounded-full"><X size={16}/></button>
+              </div>
           </div>
+      )}
+
+      {/* Move Category Modal */}
+      {isMoveModalOpen && (
+          <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/60 backdrop-blur-sm animate-in fade-in" onClick={closeMoveModal}>
+            <div className="bg-white w-full max-w-sm p-6 m-4 shadow-2xl rounded-none animate-in zoom-in-95 duration-200" onClick={e => e.stopPropagation()}>
+                <div className="flex justify-between items-center mb-6">
+                    <h3 className="text-lg font-black text-slate-900 uppercase tracking-tight">移动到分类</h3>
+                    <button onClick={closeMoveModal} className="text-slate-400 hover:text-slate-900"><X size={20}/></button>
+                </div>
+                
+                <div className="grid grid-cols-2 gap-3 max-h-[50vh] overflow-y-auto custom-scrollbar p-1">
+                    {categories.filter(c => c.id !== 'all').map(cat => (
+                        <button 
+                            key={cat.id}
+                            onClick={() => handleBatchMove(cat.id)}
+                            className="flex flex-col items-center justify-center gap-2 p-4 bg-white border border-slate-200 hover:border-slate-900 hover:shadow-md transition-all rounded-none min-h-[80px]"
+                        >
+                            <Folder size={24} className="text-slate-700" />
+                            <span className="text-xs font-bold text-slate-900 text-center truncate w-full">{cat.name}</span>
+                        </button>
+                    ))}
+                    <button 
+                        onClick={() => { closeMoveModal(); handleCreateCategory(); }}
+                        className="flex flex-col items-center justify-center gap-2 p-4 bg-slate-50 border-2 border-dashed border-slate-300 hover:border-slate-900 hover:bg-slate-100 transition-all rounded-none min-h-[80px]"
+                    >
+                        <Plus size={24} className="text-slate-400" />
+                        <span className="text-xs font-bold text-slate-600">新建分类</span>
+                    </button>
+                </div>
+            </div>
+        </div>
       )}
 
       {/* Context Menu for Categories */}
@@ -619,14 +706,3 @@ export const NoteTool: React.FC = () => {
     </div>
   );
 };
-
-const ToolButton: React.FC<{onClick: () => void, icon: React.ReactNode, title: string}> = ({ onClick, icon, title }) => (
-  <button 
-    onClick={onClick}
-    className="p-2 text-slate-600 hover:text-slate-900 hover:bg-white transition-colors rounded-sm"
-    title={title}
-    onMouseDown={(e) => e.preventDefault()} // Prevent losing focus from editor
-  >
-    {icon}
-  </button>
-);

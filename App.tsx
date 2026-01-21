@@ -248,7 +248,17 @@ const App: React.FC = () => {
   // Photos state - initially empty or from localStorage meta, but we need to hydrate blobs
   const [photos, setPhotos] = useState<Photo[]>(() => {
     const saved = localStorage.getItem('photos');
-    return saved ? JSON.parse(saved) : INITIAL_PHOTOS;
+    if (saved) {
+        const parsed = JSON.parse(saved);
+        // Important: Reset stale blob URLs to empty string on init.
+        // This prevents the browser from trying to load expired blob URLs and triggering 'onError'
+        // which would permanently hide the image before hydration can fix the URL.
+        return parsed.map((p: Photo) => ({
+            ...p,
+            url: p.url && p.url.startsWith('blob:') ? '' : p.url
+        }));
+    }
+    return INITIAL_PHOTOS;
   });
 
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
@@ -349,7 +359,7 @@ const App: React.FC = () => {
       // Instead, we will progressively update the photos as they load.
       
       // FIX: Only exclude http/https remote URLs. Allow blob: URLs to be re-hydrated from DB because they expire on refresh.
-      // Also process photos with empty URLs (failed previous imports)
+      // Also process photos with empty URLs (failed previous imports or reset on init)
       const photosToHydrate = photos.filter(p => !p.url.startsWith('http'));
       if (photosToHydrate.length === 0) return;
 
@@ -377,7 +387,20 @@ const App: React.FC = () => {
         }));
 
         if (Object.keys(updates).length > 0) {
-            setPhotos(prev => prev.map(p => updates[p.id] ? { ...p, url: updates[p.id] } : p));
+            setPhotos(prev => prev.map(p => {
+                if (updates[p.id]) {
+                     // If we successfully re-hydrated the image, remove it from failed list if it was there
+                     if (failedImages.has(p.id)) {
+                         setFailedImages(curr => {
+                             const next = new Set(curr);
+                             next.delete(p.id);
+                             return next;
+                         });
+                     }
+                     return { ...p, url: updates[p.id] };
+                }
+                return p;
+            }));
         }
         // Small delay to yield to main thread
         await new Promise(resolve => setTimeout(resolve, 10));
@@ -590,10 +613,11 @@ const App: React.FC = () => {
     // But hide the recent search dropdown via condition
   };
 
-  const handleCollectColor = (hex: string) => {
+  const handleCollectColor = (hex: string, name: string) => {
     setColorGroups(prev => {
       const favIndex = prev.findIndex(g => g.id === 'favorites');
-      const newColor = { id: crypto.randomUUID(), name: '收藏色 ' + hex.toUpperCase(), hex };
+      const displayName = name || '收藏色 ' + hex.toUpperCase();
+      const newColor = { id: crypto.randomUUID(), name: displayName, hex };
       
       let newGroups = [...prev];
       if (favIndex >= 0) {
@@ -609,7 +633,7 @@ const App: React.FC = () => {
       }
       return newGroups;
     });
-    alert('颜色已收藏到“我的收藏”分组');
+    alert(`颜色“${name || hex}”已收藏到“我的收藏”分组`);
   };
 
   const handleUploadClick = () => {
@@ -963,6 +987,22 @@ const App: React.FC = () => {
       setSelectedCategory('all');
     }
   };
+  
+  const handleBatchDeleteTags = (tagsToDelete: string[]) => {
+      setPhotos(prev => prev.map(p => ({
+          ...p,
+          tags: p.tags.filter(t => !tagsToDelete.includes(t))
+      })));
+      setTagCategoryMap(prev => {
+          const newMap = { ...prev };
+          tagsToDelete.forEach(t => delete newMap[t]);
+          return newMap;
+      });
+      // If current view is one of the deleted tags, switch to all
+      if (selectedCategory.startsWith('tag-') && tagsToDelete.includes(selectedCategory.replace('tag-', ''))) {
+          setSelectedCategory('all');
+      }
+  };
 
   const handleCategorizeTag = (tag: string, newCategory: string) => {
     setTagCategoryMap(prev => {
@@ -974,6 +1014,17 @@ const App: React.FC = () => {
       }
       return newMap;
     });
+  };
+  
+  const handleBatchCategorizeTags = (tags: string[], newCategory: string) => {
+      setTagCategoryMap(prev => {
+          const newMap = { ...prev };
+          tags.forEach(t => {
+              if (newCategory.trim() === '') delete newMap[t];
+              else newMap[t] = newCategory;
+          });
+          return newMap;
+      });
   };
 
   const handleCategorySelect = (id: string) => {
@@ -1077,6 +1128,8 @@ const App: React.FC = () => {
         onRenameTag={handleRenameTag}
         onDeleteTag={handleDeleteTag}
         onCategorizeTag={handleCategorizeTag}
+        onBatchDeleteTags={handleBatchDeleteTags}
+        onBatchCategorizeTags={handleBatchCategorizeTags}
         onOpenSettings={() => openModal('settings', () => setIsSettingsOpen(true))}
         totalPhotos={photos.length}
         isOpen={isSidebarOpen}
@@ -1234,7 +1287,7 @@ const App: React.FC = () => {
                        {selectedIds.size === filteredPhotos.length ? '取消全选' : '全选'}
                     </button>
                  </div>
-                 <div className="flex gap-2 shrink-0 ml-auto">
+                 <div className="flex gap-2 shrink-0 ml-auto flex-wrap justify-end">
                     <button onClick={handleBatchMove} disabled={selectedIds.size === 0} className="p-2 hover:bg-white/20 rounded-sm" title="移动"><Folder size={18}/></button>
                     <button onClick={handleBatchTag} disabled={selectedIds.size === 0} className="p-2 hover:bg-white/20 rounded-sm" title="标签"><Tag size={18}/></button>
                     <button onClick={handleBatchRename} disabled={selectedIds.size === 0} className="p-2 hover:bg-white/20 rounded-sm" title="重命名"><Edit2 size={18}/></button>

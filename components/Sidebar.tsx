@@ -1,6 +1,7 @@
+
 import React, { useRef, useState, useEffect } from 'react';
 import { Category, ThemeColor } from '../types';
-import { LayoutGrid, Folder, Plus, Tag, Settings, Image as ImageIcon, X, Palette, Trash2, Edit2, ChevronDown, Layers, Heart, StickyNote } from 'lucide-react';
+import { LayoutGrid, Folder, Plus, Tag, Settings, Image as ImageIcon, X, Palette, Trash2, Edit2, ChevronDown, Layers, Heart, StickyNote, CheckSquare, Square } from 'lucide-react';
 
 interface SidebarProps {
   categories: Category[];
@@ -13,6 +14,8 @@ interface SidebarProps {
   onRenameTag: (oldTag: string, newTag: string) => void;
   onDeleteTag: (tag: string) => void;
   onCategorizeTag: (tag: string, newCategory: string) => void;
+  onBatchDeleteTags?: (tags: string[]) => void;
+  onBatchCategorizeTags?: (tags: string[], category: string) => void;
   onOpenSettings: () => void;
   totalPhotos: number;
   isOpen: boolean;
@@ -70,6 +73,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onRenameTag,
   onDeleteTag,
   onCategorizeTag,
+  onBatchDeleteTags,
+  onBatchCategorizeTags,
   onOpenSettings,
   totalPhotos,
   isOpen,
@@ -80,8 +85,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const [isTagsOpen, setIsTagsOpen] = useState(false);
 
   const [contextMenuCategory, setContextMenuCategory] = useState<Category | null>(null);
-  const [contextMenuTag, setContextMenuTag] = useState<string | null>(null);
   
+  // Tag Selection State
+  const [isTagSelectionMode, setIsTagSelectionMode] = useState(false);
+  const [selectedTags, setSelectedTags] = useState<Set<string>>(new Set());
+
   // Confirmation state for deleting within sidebar context menu
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
 
@@ -97,16 +105,28 @@ export const Sidebar: React.FC<SidebarProps> = ({
   // Reset delete confirmation when menu closes or changes
   useEffect(() => {
     setDeleteConfirmId(null);
-  }, [contextMenuCategory, contextMenuTag]);
+  }, [contextMenuCategory]);
 
-  const handleStartPress = (item: any, type: 'category' | 'tag') => {
-    if (type === 'category' && item.id === 'uncategorized') return;
+  const handleStartPress = (item: Category | string, type: 'category' | 'tag') => {
+    if (type === 'category') {
+       const cat = item as Category;
+       if (cat.id === 'uncategorized') return;
+    }
     
     isLongPress.current = false;
     longPressTimer.current = setTimeout(() => {
       isLongPress.current = true;
-      if (type === 'category') setContextMenuCategory(item);
-      if (type === 'tag') setContextMenuTag(item);
+      if (type === 'category') {
+          setContextMenuCategory(item as Category);
+      }
+      if (type === 'tag') {
+          // Enter multi-select mode for tags
+          if (!isTagSelectionMode) {
+              setIsTagSelectionMode(true);
+              setSelectedTags(new Set([item as string]));
+              if (navigator.vibrate) navigator.vibrate(50);
+          }
+      }
     }, 600);
   };
 
@@ -117,9 +137,21 @@ export const Sidebar: React.FC<SidebarProps> = ({
     }
   };
 
-  const handleClick = (id: string) => {
+  const handleClick = (id: string, type: 'category' | 'tag') => {
     if (isLongPress.current) return;
-    onSelectCategory(id);
+    
+    if (type === 'tag' && isTagSelectionMode) {
+        // Toggle selection
+        const tagName = id.replace('tag-', '');
+        setSelectedTags(prev => {
+            const next = new Set(prev);
+            if (next.has(tagName)) next.delete(tagName);
+            else next.add(tagName);
+            return next;
+        });
+    } else {
+        onSelectCategory(id);
+    }
   };
 
   const handleRenameCat = () => {
@@ -141,33 +173,46 @@ export const Sidebar: React.FC<SidebarProps> = ({
     }
   };
 
-  const handleRenameTagAction = () => {
-    if (!contextMenuTag) return;
-    const newName = prompt("重命名标签", contextMenuTag);
-    if (newName && newName.trim() && newName !== contextMenuTag) {
-      onRenameTag(contextMenuTag, newName.trim());
-    }
-    setContextMenuTag(null);
+  const handleBatchRenameTag = () => {
+      if (selectedTags.size !== 1) return;
+      const tagToRename = Array.from(selectedTags)[0];
+      const newName = prompt("重命名标签", tagToRename);
+      if (newName && newName.trim() && newName !== tagToRename) {
+          onRenameTag(tagToRename, newName.trim());
+          setSelectedTags(new Set());
+          setIsTagSelectionMode(false);
+      }
   };
 
-  const handleChangeTagCategory = () => {
-    if (!contextMenuTag) return;
-    const newCat = prompt("设置标签分类 (例如: '地点', '人物', '风格')", "");
-    if (newCat !== null) {
-      onCategorizeTag(contextMenuTag, newCat.trim());
-    }
-    setContextMenuTag(null);
+  const handleBatchCategorize = () => {
+      if (selectedTags.size === 0) return;
+      const newCat = prompt("设置标签分类 (例如: '地点', '人物', '风格')", "");
+      if (newCat !== null) {
+          const tags = Array.from(selectedTags);
+          if (onBatchCategorizeTags) {
+              onBatchCategorizeTags(tags, newCat.trim());
+          } else {
+              // Fallback loop if batch function missing (shouldn't happen with updated App.tsx)
+              tags.forEach(t => onCategorizeTag(t, newCat.trim()));
+          }
+          setSelectedTags(new Set());
+          setIsTagSelectionMode(false);
+      }
   };
 
-  const handleDeleteTagAction = () => {
-    if (!contextMenuTag) return;
-    if (deleteConfirmId === contextMenuTag) {
-        onDeleteTag(contextMenuTag);
-        setContextMenuTag(null);
-        setDeleteConfirmId(null);
-    } else {
-        setDeleteConfirmId(contextMenuTag);
-    }
+  const handleBatchDelete = () => {
+      if (selectedTags.size === 0) return;
+      if (confirm(`确定删除选中的 ${selectedTags.size} 个标签吗？\n(照片不会被删除)`)) {
+          const tags = Array.from(selectedTags);
+          if (onBatchDeleteTags) {
+              onBatchDeleteTags(tags);
+          } else {
+              // Fallback loop
+              tags.forEach(t => onDeleteTag(t));
+          }
+          setSelectedTags(new Set());
+          setIsTagSelectionMode(false);
+      }
   };
 
   return (
@@ -245,7 +290,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   <div key={category.id} className="relative">
                      <button
                       onPointerDown={() => handleStartPress(category, 'category')}
-                      onPointerUp={() => { handleCancelPress(); handleClick(category.id); }}
+                      onPointerUp={() => { handleCancelPress(); handleClick(category.id, 'category'); }}
                       onPointerLeave={handleCancelPress}
                       onContextMenu={(e) => e.preventDefault()}
                       className={`w-full flex items-center gap-3 px-3 py-2 text-sm transition-all duration-200 border-l-2 rounded-none whitespace-nowrap ${getThemeTextColor(themeColor, selectedCategory === category.id)}`}
@@ -271,13 +316,21 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
           {/* Tags Section */}
           <div>
-            <button 
-              onClick={() => setIsTagsOpen(!isTagsOpen)}
-              className="flex items-center justify-between w-full px-2 mb-3 group"
-            >
-              <h3 className="text-base font-black text-slate-900 uppercase tracking-widest group-hover:text-slate-600 transition-colors whitespace-nowrap">标签分类</h3>
-              <ChevronDown size={12} className={`text-slate-400 transition-transform duration-200 ${isTagsOpen ? 'rotate-180' : ''}`} />
-            </button>
+            <div className="flex items-center justify-between w-full px-2 mb-3 group">
+                 <button 
+                  onClick={() => setIsTagsOpen(!isTagsOpen)}
+                  className="flex items-center gap-2"
+                >
+                    <h3 className="text-base font-black text-slate-900 uppercase tracking-widest group-hover:text-slate-600 transition-colors whitespace-nowrap">标签分类</h3>
+                    <ChevronDown size={12} className={`text-slate-400 transition-transform duration-200 ${isTagsOpen ? 'rotate-180' : ''}`} />
+                </button>
+                {isTagSelectionMode && (
+                    <div className="flex gap-1">
+                        <span className="text-xs font-bold text-slate-500 mr-2">{selectedTags.size}</span>
+                        <button onClick={() => { setIsTagSelectionMode(false); setSelectedTags(new Set()); }} className="text-slate-400 hover:text-slate-900 p-1"><X size={14}/></button>
+                    </div>
+                )}
+            </div>
             
             {isTagsOpen && (
               <div className="space-y-4 px-2 animate-in slide-in-from-top-1 fade-in duration-200">
@@ -292,35 +345,27 @@ export const Sidebar: React.FC<SidebarProps> = ({
                         </h4>
                       )}
                       <div className="flex flex-wrap gap-1 px-1">
-                        {tags.map(tag => (
-                          <div key={tag} className="relative">
-                            <button
-                              onPointerDown={() => handleStartPress(tag, 'tag')}
-                              onPointerUp={() => { handleCancelPress(); handleClick(`tag-${tag}`); }}
-                              onPointerLeave={handleCancelPress}
-                              onContextMenu={(e) => e.preventDefault()}
-                              className={`flex items-center gap-1.5 px-2 py-1 text-xs font-medium transition-all border rounded-none whitespace-nowrap ${
-                                selectedCategory === `tag-${tag}`
-                                  ? 'bg-slate-800 text-white border-slate-800'
-                                  : 'bg-white text-slate-600 border-slate-200 hover:border-slate-400'
-                              }`}
-                            >
-                              <Tag size={10} />
-                              <span>{tag}</span>
-                            </button>
-
-                             {contextMenuTag === tag && (
-                                <div className="absolute left-0 top-full mt-1 w-32 bg-white border border-slate-200 shadow-xl z-30 flex flex-col animate-fade-in rounded-none">
-                                  <button onClick={handleRenameTagAction} className="flex items-center gap-2 px-3 py-2.5 text-xs text-slate-700 hover:bg-slate-50 text-left border-b border-slate-50 whitespace-nowrap w-full"><Edit2 size={12} /> 重命名</button>
-                                  <button onClick={handleChangeTagCategory} className="flex items-center gap-2 px-3 py-2.5 text-xs text-slate-700 hover:bg-slate-50 text-left border-b border-slate-50 whitespace-nowrap w-full"><Layers size={12} /> 分类</button>
-                                  <button onClick={handleDeleteTagAction} className={`flex items-center gap-2 px-3 py-2.5 text-xs text-left border-b border-slate-50 whitespace-nowrap w-full transition-colors ${deleteConfirmId === tag ? 'bg-red-50 text-red-600 font-bold' : 'text-rose-600 hover:bg-rose-50'}`}>
-                                    <Trash2 size={12} /> {deleteConfirmId === tag ? '确认?' : '删除'}
-                                  </button>
-                                  <button onClick={() => setContextMenuTag(null)} className="px-3 py-1.5 text-[10px] text-center text-slate-400 bg-slate-50 hover:bg-slate-100 whitespace-nowrap w-full">取消</button>
+                        {tags.map(tag => {
+                            const isSelected = selectedTags.has(tag);
+                            return (
+                                <div key={tag} className="relative">
+                                    <button
+                                    onPointerDown={() => handleStartPress(tag, 'tag')}
+                                    onPointerUp={() => { handleCancelPress(); handleClick(`tag-${tag}`, 'tag'); }}
+                                    onPointerLeave={handleCancelPress}
+                                    onContextMenu={(e) => e.preventDefault()}
+                                    className={`flex items-center gap-1.5 px-2 py-1 text-xs font-medium transition-all border rounded-none whitespace-nowrap ${
+                                        isTagSelectionMode 
+                                            ? (isSelected ? `bg-${themeColor === 'zinc' ? 'slate-900' : themeColor + '-600'} text-white border-transparent` : 'bg-gray-50 text-gray-400 border-gray-200')
+                                            : (selectedCategory === `tag-${tag}` ? 'bg-slate-800 text-white border-slate-800' : 'bg-white text-slate-600 border-slate-200 hover:border-slate-400')
+                                    }`}
+                                    >
+                                    {isTagSelectionMode ? (isSelected ? <CheckSquare size={10}/> : <Square size={10}/>) : <Tag size={10} />}
+                                    <span>{tag}</span>
+                                    </button>
                                 </div>
-                              )}
-                          </div>
-                        ))}
+                            );
+                        })}
                       </div>
                     </div>
                   ))
@@ -350,15 +395,41 @@ export const Sidebar: React.FC<SidebarProps> = ({
           </div>
         </nav>
 
-        <div className="p-4 border-t border-slate-100">
-          <button 
-            onClick={onOpenSettings}
-            className="flex items-center gap-3 px-2 py-2 text-xs font-bold uppercase tracking-wider text-slate-400 hover:text-slate-800 transition-colors w-full whitespace-nowrap"
-          >
-            <Settings size={14} />
-            <span>设置</span>
-          </button>
-        </div>
+        {isTagSelectionMode ? (
+            <div className="p-2 border-t border-slate-100 bg-slate-50 flex justify-between items-center gap-1">
+                <button 
+                    onClick={handleBatchRenameTag}
+                    disabled={selectedTags.size !== 1}
+                    className="flex flex-col items-center justify-center p-2 text-[10px] font-bold uppercase text-slate-600 disabled:opacity-30 hover:bg-white rounded-sm flex-1"
+                >
+                    <Edit2 size={14} className="mb-1"/> 重命名
+                </button>
+                 <button 
+                    onClick={handleBatchCategorize}
+                    disabled={selectedTags.size === 0}
+                    className="flex flex-col items-center justify-center p-2 text-[10px] font-bold uppercase text-slate-600 disabled:opacity-30 hover:bg-white rounded-sm flex-1"
+                >
+                    <Layers size={14} className="mb-1"/> 分类
+                </button>
+                 <button 
+                    onClick={handleBatchDelete}
+                    disabled={selectedTags.size === 0}
+                    className="flex flex-col items-center justify-center p-2 text-[10px] font-bold uppercase text-red-500 disabled:opacity-30 hover:bg-white rounded-sm flex-1"
+                >
+                    <Trash2 size={14} className="mb-1"/> 删除
+                </button>
+            </div>
+        ) : (
+            <div className="p-4 border-t border-slate-100">
+            <button 
+                onClick={onOpenSettings}
+                className="flex items-center gap-3 px-2 py-2 text-xs font-bold uppercase tracking-wider text-slate-400 hover:text-slate-800 transition-colors w-full whitespace-nowrap"
+            >
+                <Settings size={14} />
+                <span>设置</span>
+            </button>
+            </div>
+        )}
       </aside>
     </>
   );
