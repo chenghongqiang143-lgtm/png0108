@@ -245,14 +245,11 @@ const App: React.FC = () => {
     return saved ? JSON.parse(saved) : INITIAL_CATEGORIES;
   });
 
-  // Photos state - initially empty or from localStorage meta, but we need to hydrate blobs
+  // Photos state
   const [photos, setPhotos] = useState<Photo[]>(() => {
     const saved = localStorage.getItem('photos');
     if (saved) {
         const parsed = JSON.parse(saved);
-        // Important: Reset stale blob URLs to empty string on init.
-        // This prevents the browser from trying to load expired blob URLs and triggering 'onError'
-        // which would permanently hide the image before hydration can fix the URL.
         return parsed.map((p: Photo) => ({
             ...p,
             url: p.url && p.url.startsWith('blob:') ? '' : p.url
@@ -262,6 +259,16 @@ const App: React.FC = () => {
   });
 
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
+  
+  // Tag Filter State (Multi-select)
+  const [activeTagFilters, setActiveTagFilters] = useState<Set<string>>(new Set());
+  
+  // Custom Tags (Created manually in sidebar, unrelated to specific photos)
+  const [customTags, setCustomTags] = useState<string[]>(() => {
+    const saved = localStorage.getItem('custom_tags');
+    return saved ? JSON.parse(saved) : [];
+  });
+
   const [searchQuery, setSearchQuery] = useState('');
   
   // Search History
@@ -270,6 +277,8 @@ const App: React.FC = () => {
     const saved = localStorage.getItem('recent_searches');
     return saved ? JSON.parse(saved) : ['风景', '咖啡', '旅行'];
   });
+  
+  const searchRef = useRef<HTMLDivElement>(null);
 
   // Color Library State (Lifted from ColorTool)
   const [colorGroups, setColorGroups] = useState<ColorGroup[]>(() => {
@@ -352,18 +361,13 @@ const App: React.FC = () => {
     requestPersistence();
   }, []);
 
-  // Optimized Loading: Load photos from DB in background, render UI immediately
+  // Optimized Loading
   useEffect(() => {
     const hydratePhotos = async () => {
-      // Don't set isLoading(true) to avoid blocking UI. 
-      // Instead, we will progressively update the photos as they load.
-      
-      // FIX: Only exclude http/https remote URLs. Allow blob: URLs to be re-hydrated from DB because they expire on refresh.
-      // Also process photos with empty URLs (failed previous imports or reset on init)
       const photosToHydrate = photos.filter(p => !p.url.startsWith('http'));
       if (photosToHydrate.length === 0) return;
 
-      const BATCH_SIZE = 6; // Reduced batch size to prevent DB choke on low-end devices
+      const BATCH_SIZE = 6; 
       
       for (let i = 0; i < photosToHydrate.length; i += BATCH_SIZE) {
         const chunk = photosToHydrate.slice(i, i + BATCH_SIZE);
@@ -371,15 +375,11 @@ const App: React.FC = () => {
         
         await Promise.all(chunk.map(async (photo) => {
              try {
-                // Try thumb first
                 let blob = await getThumbnailFromDB(photo.id);
-                // Fallback to full image
                 if (!blob) blob = await getImageFromDB(photo.id);
                 
                 if (blob) {
                     updates[photo.id] = URL.createObjectURL(blob);
-                } else {
-                    console.warn(`Could not find image or thumbnail for ${photo.id}`);
                 }
              } catch (e) {
                 console.error("Hydration fail", photo.id, e);
@@ -389,7 +389,6 @@ const App: React.FC = () => {
         if (Object.keys(updates).length > 0) {
             setPhotos(prev => prev.map(p => {
                 if (updates[p.id]) {
-                     // If we successfully re-hydrated the image, remove it from failed list if it was there
                      if (failedImages.has(p.id)) {
                          setFailedImages(curr => {
                              const next = new Set(curr);
@@ -402,29 +401,21 @@ const App: React.FC = () => {
                 return p;
             }));
         }
-        // Small delay to yield to main thread
         await new Promise(resolve => setTimeout(resolve, 10));
       }
     };
 
     hydratePhotos();
-    
-    // NOTE: We do NOT revoke object URLs on unmount here anymore to prevent 
-    // race conditions where valid URLs are revoked during strict mode double-mounts
-    // or rapid re-renders, causing images to disappear. 
-    // Browsers will clean up when the page is closed/refreshed.
-  }, []); // Run once on mount
+  }, []);
   
   // Lazy load full quality image when modal opens
   useEffect(() => {
       if (selectedPhoto && selectedPhoto.id) {
           let isMounted = true;
-          // Trigger async load of full image
           getImageFromDB(selectedPhoto.id).then(blob => {
               if (isMounted && blob) {
                   const fullUrl = URL.createObjectURL(blob);
                   setSelectedPhoto(prev => {
-                      // Only update if url is different (to update from thumb to full)
                       if (prev && prev.id === selectedPhoto.id && prev.url !== fullUrl) {
                            return { ...prev, url: fullUrl };
                       }
@@ -444,34 +435,40 @@ const App: React.FC = () => {
     localStorage.setItem('categories', JSON.stringify(categories));
   }, [categories]);
 
-  // --- ROBUST HISTORY API HANDLER for Mobile Back Gesture ---
-  
-  // Helper to open a modal and push history state
+  useEffect(() => {
+    localStorage.setItem('custom_tags', JSON.stringify(customTags));
+  }, [customTags]);
+
+  // Click outside to close search
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (searchRef.current && !searchRef.current.contains(event.target as Node)) {
+        setIsSearchFocused(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  // --- ROBUST HISTORY API HANDLER ---
   const openModal = (modalKey: string, action: () => void) => {
       window.history.pushState({ modal: modalKey }, '', window.location.href);
       action();
   };
 
-  // Helper to close modal via UI (Cross Button / Backdrop)
   const closeModal = () => {
       window.history.back();
   };
 
-  // Robust history handler to manage multiple layers of state
   useEffect(() => {
     const handlePopState = (e: PopStateEvent) => {
       const state = e.state;
       const modalKey = state?.modal;
 
-      // Close items if their expected history state is missing (meaning we went back)
-      
-      // 1. Photo Modal
       if (selectedPhoto && modalKey !== 'photo') {
         setSelectedPhoto(null);
         return;
       }
-      
-      // 2. Batch Operations
       if (isBatchMoveOpen && modalKey !== 'batch-move') {
         setIsBatchMoveOpen(false);
         return;
@@ -484,8 +481,6 @@ const App: React.FC = () => {
         setIsBatchRenameOpen(false);
         return;
       }
-
-      // 3. Menus & Settings
       if (isUploadMenuOpen && modalKey !== 'upload') {
         setIsUploadMenuOpen(false);
         return;
@@ -494,21 +489,15 @@ const App: React.FC = () => {
         setIsSettingsOpen(false);
         return;
       }
-      
-      // 4. Sidebar
       if (isSidebarOpen && modalKey !== 'sidebar') {
         setIsSidebarOpen(false);
         return;
       }
-      
-      // 5. Selection Mode
       if (isSelectionMode && modalKey !== 'selection') {
         setIsSelectionMode(false);
         setSelectedIds(new Set());
         return;
       }
-
-      // 6. Search Focus
       if (isSearchFocused && modalKey !== 'search') {
           setIsSearchFocused(false);
           return;
@@ -532,7 +521,6 @@ const App: React.FC = () => {
     localStorage.setItem('color_groups', JSON.stringify(colorGroups));
   }, [colorGroups]);
 
-  // Reset selection on category change
   useEffect(() => {
     setIsSelectionMode(false);
     setSelectedIds(new Set());
@@ -543,10 +531,13 @@ const App: React.FC = () => {
     setContextMenuDeleteConfirm(false);
   }, [contextMenuPhoto]);
 
-  // Group tags
+  // Group tags (Derived from both photos AND manually created custom tags)
   const groupedTags = useMemo(() => {
     const groups: Record<string, string[]> = {};
-    const allUniqueTags = Array.from(new Set(photos.flatMap(p => p.tags))).sort();
+    const photoTags = new Set(photos.flatMap(p => p.tags));
+    customTags.forEach(t => photoTags.add(t)); // Add custom tags
+    
+    const allUniqueTags = Array.from(photoTags).sort();
 
     allUniqueTags.forEach((tag: string) => {
       const cat = tagCategoryMap[tag] || '未分类';
@@ -554,16 +545,28 @@ const App: React.FC = () => {
       groups[cat].push(tag);
     });
     return groups;
-  }, [photos, tagCategoryMap]);
+  }, [photos, tagCategoryMap, customTags]);
 
   const allTags = useMemo(() => {
-    return Array.from(new Set(photos.flatMap(p => p.tags))).sort();
-  }, [photos]);
+    const photoTags = new Set(photos.flatMap(p => p.tags));
+    customTags.forEach(t => photoTags.add(t));
+    return Array.from(photoTags).sort();
+  }, [photos, customTags]);
 
   const filteredPhotos = useMemo(() => {
     let result = photos;
-    if (selectedCategory !== 'all' && !isToolView) {
+
+    // 1. Tag Filter Override
+    if (activeTagFilters.size > 0) {
+      // If tag filters are active, we search across ALL photos (or intersect with category?)
+      // Standard behavior: Filtering by tag shows photos with those tags.
+      // Logic: OR (Union) - Show photos that have ANY of the selected tags.
+      result = result.filter(p => p.tags.some(t => activeTagFilters.has(t)));
+    } 
+    // 2. Category Filter (only if no tags selected, or we could combine logic)
+    else if (selectedCategory !== 'all' && !isToolView) {
       if (selectedCategory.startsWith('tag-')) {
+        // Legacy single tag click support (now covered by activeTagFilters mostly, but kept for safe fallback)
         const tagName = selectedCategory.replace('tag-', '');
         result = result.filter(p => p.tags.includes(tagName));
       } else if (selectedCategory === 'favorites') {
@@ -572,6 +575,7 @@ const App: React.FC = () => {
         result = result.filter(p => p.categoryId === selectedCategory);
       }
     }
+
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase();
       result = result.filter(p => 
@@ -581,7 +585,7 @@ const App: React.FC = () => {
       );
     }
     return result.sort((a, b) => b.createdAt - a.createdAt);
-  }, [photos, selectedCategory, searchQuery, isToolView]);
+  }, [photos, selectedCategory, searchQuery, isToolView, activeTagFilters]);
 
   const groupedPhotos = useMemo(() => groupPhotosByDate(filteredPhotos), [filteredPhotos]);
 
@@ -609,8 +613,6 @@ const App: React.FC = () => {
       const newHistory = [term, ...prev.filter(t => t !== term)].slice(0, 5);
       return newHistory;
     });
-    // Do not clear focus immediately, so users can still see they are searching
-    // But hide the recent search dropdown via condition
   };
 
   const handleCollectColor = (hex: string, name: string) => {
@@ -664,22 +666,16 @@ const App: React.FC = () => {
          await Promise.all(chunk.map(async (file) => {
              try {
                 const newPhotoId = crypto.randomUUID();
-                
-                // Save original
                 await saveImageToDB(newPhotoId, file);
                 
-                // Generate and save thumbnail
                 let displayUrl;
                 try {
                     const thumbBlob = await generateThumbnail(file);
-                    // Ensure thumbBlob is not null/undefined just in case
                     const blobToSave = thumbBlob || file;
                     await saveThumbnailToDB(newPhotoId, blobToSave);
                     displayUrl = URL.createObjectURL(blobToSave);
                 } catch (e) {
-                    console.warn("Thumbnail failed, using original", e);
                     displayUrl = URL.createObjectURL(file);
-                    // Also attempt to save original as thumbnail entry so subsequent loads find it
                     saveThumbnailToDB(newPhotoId, file).catch(err => console.error("Fallback save failed", err));
                 }
 
@@ -687,7 +683,7 @@ const App: React.FC = () => {
 
                 const newPhoto: Photo = {
                   id: newPhotoId,
-                  url: displayUrl, // Use thumbnail URL for grid
+                  url: displayUrl, 
                   title: title,
                   description: '',
                   tags: [],
@@ -737,15 +733,12 @@ const App: React.FC = () => {
           if (confirm('再次确认：删除所有照片无法恢复。')) {
               setIsLoading(true);
               try {
-                  // Delete all images from IndexedDB
                   await Promise.all(photos.map(p => deleteImageFromDB(p.id)));
-                  // Clear photos state
                   setPhotos([]);
                   setFailedImages(new Set());
-                  closeModal(); // Close Settings
+                  closeModal(); 
                   alert('所有照片已删除');
               } catch (e) {
-                  console.error("Failed to delete all photos", e);
                   alert('删除过程中出现错误');
               } finally {
                   setIsLoading(false);
@@ -783,7 +776,6 @@ const App: React.FC = () => {
     closeModal();
     setSelectedIds(new Set());
     setIsSelectionMode(false);
-    // Don't go back here, modal closing handles history
   };
 
   // -- Batch Tag Logic --
@@ -821,7 +813,6 @@ const App: React.FC = () => {
   };
 
   const confirmBatchRename = () => {
-      // Extract selected photos respecting the current view order
       const selectedSet = selectedIds;
       const orderedSelectedPhotos = filteredPhotos.filter(p => selectedSet.has(p.id));
       
@@ -851,11 +842,12 @@ const App: React.FC = () => {
     const data = {
       version: 1,
       timestamp: Date.now(),
-      photos: photos.map(p => ({ ...p, url: '' })), // Only metadata, URLs are local blobs
+      photos: photos.map(p => ({ ...p, url: '' })), 
       categories,
       note_categories: JSON.parse(localStorage.getItem('note_categories') || '[]'),
       notes: JSON.parse(localStorage.getItem('inspiration_notes') || '[]'),
-      color_groups: colorGroups
+      color_groups: colorGroups,
+      custom_tags: customTags
     };
     
     const jsonString = JSON.stringify(data, null, 2);
@@ -864,7 +856,7 @@ const App: React.FC = () => {
       alert('元数据已复制到剪贴板！\n注意：此备份仅包含分类、标签、便签等文字信息，不包含图片文件本身。');
     } catch (e) {
       alert('复制失败，请手动复制下方内容');
-      setImportDataString(jsonString); // Show in textarea for manual copy
+      setImportDataString(jsonString); 
     }
   };
 
@@ -876,33 +868,24 @@ const App: React.FC = () => {
       if (!data.version || !data.photos) throw new Error("Invalid format");
       
       if (confirm('导入将覆盖当前所有分类和便签设置，并合并照片记录。确定要继续吗？')) {
-        // Restore categories
         if (data.categories) setCategories(data.categories);
+        if (data.custom_tags) setCustomTags(data.custom_tags);
         
-        // Restore notes
         if (data.notes) localStorage.setItem('inspiration_notes', JSON.stringify(data.notes));
         if (data.note_categories) localStorage.setItem('note_categories', JSON.stringify(data.note_categories));
         
-        // Restore colors
         if (data.color_groups) setColorGroups(data.color_groups);
-        
-        // Merge photos (preserving existing blob URLs if match)
-        // Since imported photos have empty URLs, we only use them for metadata.
-        // If ID matches, we keep local blob URL but update metadata.
-        // If ID doesn't match (new photo metadata), it will show as broken until image is re-added or handled.
         
         const mergedPhotos = [...photos];
         const currentIds = new Set(photos.map(p => p.id));
         
         data.photos.forEach((p: Photo) => {
             if (currentIds.has(p.id)) {
-                // Update metadata of existing
                 const index = mergedPhotos.findIndex(mp => mp.id === p.id);
                 if (index !== -1) {
                     mergedPhotos[index] = { ...p, url: mergedPhotos[index].url }; 
                 }
             } else {
-                // Add new (will be broken image, but metadata exists)
                 mergedPhotos.push(p);
             }
         });
@@ -944,6 +927,19 @@ const App: React.FC = () => {
       setCategories([...categories, newCat]);
     }
   };
+  
+  const handleCreateTag = () => {
+      const name = prompt("请输入新标签名称：");
+      if (name && name.trim()) {
+          const trimmed = name.trim();
+          if (!allTags.includes(trimmed)) {
+            setCustomTags(prev => [...prev, trimmed]);
+            // If created in Tag view, switch to it? No, stay in current view.
+          } else {
+              alert("标签已存在");
+          }
+      }
+  };
 
   const handleRenameCategory = (id: string, newName: string) => {
     setCategories(prev => prev.map(c => c.id === id ? { ...c, name: newName, slug: newName.toLowerCase().replace(/\s+/g, '-') } : c));
@@ -960,6 +956,9 @@ const App: React.FC = () => {
       ...p,
       tags: p.tags.map(t => t === oldTag ? newTag : t)
     })));
+    // Also update custom tags if present
+    setCustomTags(prev => prev.map(t => t === oldTag ? newTag : t));
+    
     setTagCategoryMap(prev => {
       const newMap = { ...prev };
       if (newMap[oldTag]) {
@@ -978,13 +977,20 @@ const App: React.FC = () => {
       ...p,
       tags: p.tags.filter(t => t !== tagToDelete)
     })));
+    setCustomTags(prev => prev.filter(t => t !== tagToDelete));
+    
     setTagCategoryMap(prev => {
       const newMap = { ...prev };
       delete newMap[tagToDelete];
       return newMap;
     });
-    if (selectedCategory === `tag-${tagToDelete}`) {
-      setSelectedCategory('all');
+    // Remove from active filters if deleted
+    if (activeTagFilters.has(tagToDelete)) {
+        setActiveTagFilters(prev => {
+            const next = new Set(prev);
+            next.delete(tagToDelete);
+            return next;
+        });
     }
   };
   
@@ -993,15 +999,19 @@ const App: React.FC = () => {
           ...p,
           tags: p.tags.filter(t => !tagsToDelete.includes(t))
       })));
+      setCustomTags(prev => prev.filter(t => !tagsToDelete.includes(t)));
+      
       setTagCategoryMap(prev => {
           const newMap = { ...prev };
           tagsToDelete.forEach(t => delete newMap[t]);
           return newMap;
       });
-      // If current view is one of the deleted tags, switch to all
-      if (selectedCategory.startsWith('tag-') && tagsToDelete.includes(selectedCategory.replace('tag-', ''))) {
-          setSelectedCategory('all');
-      }
+      
+      setActiveTagFilters(prev => {
+          const next = new Set(prev);
+          tagsToDelete.forEach(t => next.delete(t));
+          return next;
+      });
   };
 
   const handleCategorizeTag = (tag: string, newCategory: string) => {
@@ -1029,9 +1039,25 @@ const App: React.FC = () => {
 
   const handleCategorySelect = (id: string) => {
     setSelectedCategory(id);
+    // Clearing tag filters when switching main categories
+    setActiveTagFilters(new Set());
     if (isSidebarOpen) {
         closeModal();
     }
+  };
+
+  const handleToggleTagFilter = (tag: string) => {
+      setActiveTagFilters(prev => {
+          const next = new Set(prev);
+          if (next.has(tag)) next.delete(tag);
+          else next.add(tag);
+          return next;
+      });
+      // Ensure we are in a mode that shows tags (if user was in a specific album, we might want to stay there and filter? 
+      // For now, prompt implies "Screening", which usually means applying filters to current view.
+      // But based on previous logic, tags were separate views. 
+      // Let's keep `selectedCategory` as is, but `filteredPhotos` will respect tags.
+      // If user clicks a tag, usually they want to filter.
   };
 
   const startPress = (photo: Photo) => {
@@ -1080,6 +1106,9 @@ const App: React.FC = () => {
   };
 
   const getPageTitle = () => {
+    if (activeTagFilters.size > 0) {
+        return `标签筛选 (${activeTagFilters.size})`;
+    }
     if (selectedCategory === 'all') return '所有照片';
     if (selectedCategory === 'favorites') return '我的收藏';
     if (selectedCategory === 'tool-color') return '配色助手';
@@ -1105,7 +1134,6 @@ const App: React.FC = () => {
   };
 
   if (isLoading) {
-    // Only kept as fallback, mostly unreachable with new logic
     return (
       <div className="h-screen w-full flex items-center justify-center bg-gray-50 flex-col gap-4">
         <div className={`w-12 h-12 rounded-full border-4 border-slate-200 border-t-slate-900 animate-spin`}></div>
@@ -1125,6 +1153,7 @@ const App: React.FC = () => {
         onCreateCategory={handleCreateCategory}
         onRenameCategory={handleRenameCategory}
         onDeleteCategory={handleDeleteCategory}
+        onCreateTag={handleCreateTag}
         onRenameTag={handleRenameTag}
         onDeleteTag={handleDeleteTag}
         onCategorizeTag={handleCategorizeTag}
@@ -1135,6 +1164,8 @@ const App: React.FC = () => {
         isOpen={isSidebarOpen}
         onClose={closeModal}
         themeColor={themeColor}
+        activeTagFilters={activeTagFilters}
+        onToggleTagFilter={handleToggleTagFilter}
       />
 
       <main className="flex-1 flex flex-col h-full overflow-hidden w-full relative transition-all duration-300">
@@ -1149,7 +1180,7 @@ const App: React.FC = () => {
 
             <div className="flex-1 px-4 md:px-0 flex justify-center md:justify-start">
                {isSearchFocused || searchQuery ? (
-                 <div className="w-full max-w-md relative group">
+                 <div ref={searchRef} className="w-full max-w-md relative group">
                     <button 
                         onClick={() => handleSearchSubmit(searchQuery)}
                         className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 group-focus-within:text-slate-900 transition-colors cursor-pointer z-10"
@@ -1246,7 +1277,7 @@ const App: React.FC = () => {
           </div>
           
           {isSearchFocused && !searchQuery && recentSearches.length > 0 && (
-             <div className="absolute top-full left-0 right-0 bg-white border-b border-slate-200 p-4 shadow-lg animate-fade-in z-20">
+             <div className="absolute top-full left-0 right-0 bg-white border-b border-slate-200 p-4 shadow-lg animate-fade-in z-20" onMouseDown={(e) => e.preventDefault()}>
                <div className="flex items-center gap-2 mb-2 text-xs font-bold text-slate-400 uppercase tracking-widest">
                  <Clock size={12} /> 最近搜索
                </div>
@@ -1303,7 +1334,9 @@ const App: React.FC = () => {
               <div className="flex flex-col items-center justify-center h-64 text-slate-400 mt-10">
                 <ImagePlus size={48} strokeWidth={1} className="mb-4 text-slate-300" />
                 <p className="text-lg font-medium text-slate-500">这里空空如也</p>
-                <p className="text-sm mt-2">点击右上角“导入”按钮添加照片</p>
+                <p className="text-sm mt-2">
+                    {activeTagFilters.size > 0 ? "没有照片符合选中的标签" : "点击右上角“导入”按钮添加照片"}
+                </p>
               </div>
             ) : (
               <div className="space-y-8">

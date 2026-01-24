@@ -1,7 +1,7 @@
 
 import React, { useRef, useState, useEffect } from 'react';
 import { Category, ThemeColor } from '../types';
-import { LayoutGrid, Folder, Plus, Tag, Settings, Image as ImageIcon, X, Palette, Trash2, Edit2, ChevronDown, Layers, Heart, StickyNote, CheckSquare, Square } from 'lucide-react';
+import { LayoutGrid, Folder, Plus, Tag, Settings, Image as ImageIcon, X, Palette, Trash2, Edit2, ChevronDown, Layers, Heart, StickyNote, CheckSquare, Square, Check } from 'lucide-react';
 
 interface SidebarProps {
   categories: Category[];
@@ -11,6 +11,7 @@ interface SidebarProps {
   onCreateCategory: () => void;
   onRenameCategory: (id: string, name: string) => void;
   onDeleteCategory: (id: string) => void;
+  onCreateTag: () => void;
   onRenameTag: (oldTag: string, newTag: string) => void;
   onDeleteTag: (tag: string) => void;
   onCategorizeTag: (tag: string, newCategory: string) => void;
@@ -21,6 +22,8 @@ interface SidebarProps {
   isOpen: boolean;
   onClose: () => void;
   themeColor: ThemeColor;
+  activeTagFilters?: Set<string>;
+  onToggleTagFilter?: (tag: string) => void;
 }
 
 // Helper to get text color based on theme
@@ -70,6 +73,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onCreateCategory,
   onRenameCategory,
   onDeleteCategory,
+  onCreateTag,
   onRenameTag,
   onDeleteTag,
   onCategorizeTag,
@@ -79,14 +83,16 @@ export const Sidebar: React.FC<SidebarProps> = ({
   totalPhotos,
   isOpen,
   onClose,
-  themeColor
+  themeColor,
+  activeTagFilters = new Set<string>(),
+  onToggleTagFilter
 }) => {
   const [isAlbumsOpen, setIsAlbumsOpen] = useState(false);
   const [isTagsOpen, setIsTagsOpen] = useState(false);
 
   const [contextMenuCategory, setContextMenuCategory] = useState<Category | null>(null);
   
-  // Tag Selection State
+  // Tag Selection State (for Batch Editing, distinct from filtering)
   const [isTagSelectionMode, setIsTagSelectionMode] = useState(false);
   const [selectedTags, setSelectedTags] = useState<Set<string>>(new Set());
 
@@ -97,10 +103,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const isLongPress = useRef(false);
 
   useEffect(() => {
-    if (selectedCategory.startsWith('tag-')) setIsTagsOpen(true);
+    if (selectedCategory.startsWith('tag-') || activeTagFilters.size > 0) setIsTagsOpen(true);
     const isCat = categories.some(c => c.id === selectedCategory);
     if (isCat) setIsAlbumsOpen(true);
-  }, [selectedCategory, categories]);
+  }, [selectedCategory, categories, activeTagFilters]);
   
   // Reset delete confirmation when menu closes or changes
   useEffect(() => {
@@ -120,7 +126,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           setContextMenuCategory(item as Category);
       }
       if (type === 'tag') {
-          // Enter multi-select mode for tags
+          // Enter multi-select mode for tags (batch edit)
           if (!isTagSelectionMode) {
               setIsTagSelectionMode(true);
               setSelectedTags(new Set([item as string]));
@@ -140,16 +146,28 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const handleClick = (id: string, type: 'category' | 'tag') => {
     if (isLongPress.current) return;
     
-    if (type === 'tag' && isTagSelectionMode) {
-        // Toggle selection
+    if (type === 'tag') {
         const tagName = id.replace('tag-', '');
-        setSelectedTags(prev => {
-            const next = new Set(prev);
-            if (next.has(tagName)) next.delete(tagName);
-            else next.add(tagName);
-            return next;
-        });
+        
+        if (isTagSelectionMode) {
+            // In Batch Edit Mode: Toggle selection for renaming/deleting
+            setSelectedTags(prev => {
+                const next = new Set(prev);
+                if (next.has(tagName)) next.delete(tagName);
+                else next.add(tagName);
+                return next;
+            });
+        } else {
+            // Normal Mode: Toggle Filter
+            if (onToggleTagFilter) {
+                onToggleTagFilter(tagName);
+            } else {
+                // Fallback for old behavior if prop not passed
+                onSelectCategory(id);
+            }
+        }
     } else {
+        // Categories/Albums
         onSelectCategory(id);
     }
   };
@@ -192,7 +210,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
           if (onBatchCategorizeTags) {
               onBatchCategorizeTags(tags, newCat.trim());
           } else {
-              // Fallback loop if batch function missing (shouldn't happen with updated App.tsx)
               tags.forEach(t => onCategorizeTag(t, newCat.trim()));
           }
           setSelectedTags(new Set());
@@ -207,7 +224,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
           if (onBatchDeleteTags) {
               onBatchDeleteTags(tags);
           } else {
-              // Fallback loop
               tags.forEach(t => onDeleteTag(t));
           }
           setSelectedTags(new Set());
@@ -225,7 +241,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         />
       )}
 
-      {/* Sidebar Container - Sharp edges, clean look */}
+      {/* Sidebar Container */}
       <aside className={`
         fixed inset-y-0 left-0 z-50 w-64 flex-shrink-0 flex flex-col h-full 
         transform transition-transform duration-300 ease-in-out
@@ -254,7 +270,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             <h3 className="text-base font-black text-slate-900 uppercase tracking-widest mb-3 px-2 whitespace-nowrap">图库</h3>
             <button
               onClick={() => onSelectCategory('all')}
-              className={`w-full flex items-center gap-3 px-3 py-2.5 text-sm font-medium transition-all duration-200 border-l-2 rounded-none whitespace-nowrap ${getThemeTextColor(themeColor, selectedCategory === 'all')}`}
+              className={`w-full flex items-center gap-3 px-3 py-2.5 text-sm font-medium transition-all duration-200 border-l-2 rounded-none whitespace-nowrap ${getThemeTextColor(themeColor, selectedCategory === 'all' && activeTagFilters.size === 0)}`}
             >
               <LayoutGrid size={18} strokeWidth={2} />
               <span>所有照片</span>
@@ -286,16 +302,16 @@ export const Sidebar: React.FC<SidebarProps> = ({
             
             {isAlbumsOpen && (
               <div className="space-y-0.5 relative animate-in slide-in-from-top-1 fade-in duration-200">
-                {categories.map((category) => (
+                {categories.map((category: Category) => (
                   <div key={category.id} className="relative">
                      <button
                       onPointerDown={() => handleStartPress(category, 'category')}
                       onPointerUp={() => { handleCancelPress(); handleClick(category.id, 'category'); }}
                       onPointerLeave={handleCancelPress}
                       onContextMenu={(e) => e.preventDefault()}
-                      className={`w-full flex items-center gap-3 px-3 py-2 text-sm transition-all duration-200 border-l-2 rounded-none whitespace-nowrap ${getThemeTextColor(themeColor, selectedCategory === category.id)}`}
+                      className={`w-full flex items-center gap-3 px-3 py-2 text-sm transition-all duration-200 border-l-2 rounded-none whitespace-nowrap ${getThemeTextColor(themeColor, selectedCategory === category.id && activeTagFilters.size === 0)}`}
                     >
-                      <Folder size={16} className={getThemeIconColor(themeColor, selectedCategory === category.id)} />
+                      <Folder size={16} className={getThemeIconColor(themeColor, selectedCategory === category.id && activeTagFilters.size === 0)} />
                       <span className="truncate">{category.name}</span>
                     </button>
                     
@@ -324,11 +340,15 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     <h3 className="text-base font-black text-slate-900 uppercase tracking-widest group-hover:text-slate-600 transition-colors whitespace-nowrap">标签分类</h3>
                     <ChevronDown size={12} className={`text-slate-400 transition-transform duration-200 ${isTagsOpen ? 'rotate-180' : ''}`} />
                 </button>
-                {isTagSelectionMode && (
+                {isTagSelectionMode ? (
                     <div className="flex gap-1">
                         <span className="text-xs font-bold text-slate-500 mr-2">{selectedTags.size}</span>
                         <button onClick={() => { setIsTagSelectionMode(false); setSelectedTags(new Set()); }} className="text-slate-400 hover:text-slate-900 p-1"><X size={14}/></button>
                     </div>
+                ) : (
+                    <button onClick={onCreateTag} className="text-slate-400 hover:text-slate-900 transition-colors p-1" title="新建标签">
+                        <Plus size={14} />
+                    </button>
                 )}
             </div>
             
@@ -346,7 +366,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
                       )}
                       <div className="flex flex-wrap gap-1 px-1">
                         {tags.map(tag => {
-                            const isSelected = selectedTags.has(tag);
+                            const isSelectedInBatchMode = isTagSelectionMode && selectedTags.has(tag);
+                            const isSelectedFilter = !isTagSelectionMode && activeTagFilters.has(tag);
+                            
                             return (
                                 <div key={tag} className="relative">
                                     <button
@@ -356,11 +378,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
                                     onContextMenu={(e) => e.preventDefault()}
                                     className={`flex items-center gap-1.5 px-2 py-1 text-xs font-medium transition-all border rounded-none whitespace-nowrap ${
                                         isTagSelectionMode 
-                                            ? (isSelected ? `bg-${themeColor === 'zinc' ? 'slate-900' : themeColor + '-600'} text-white border-transparent` : 'bg-gray-50 text-gray-400 border-gray-200')
-                                            : (selectedCategory === `tag-${tag}` ? 'bg-slate-800 text-white border-slate-800' : 'bg-white text-slate-600 border-slate-200 hover:border-slate-400')
+                                            ? (isSelectedInBatchMode ? `bg-${themeColor === 'zinc' ? 'slate-900' : themeColor + '-600'} text-white border-transparent` : 'bg-gray-50 text-gray-400 border-gray-200')
+                                            : (isSelectedFilter ? 'bg-slate-800 text-white border-slate-800 shadow-md ring-1 ring-slate-800' : 'bg-white text-slate-600 border-slate-200 hover:border-slate-400')
                                     }`}
                                     >
-                                    {isTagSelectionMode ? (isSelected ? <CheckSquare size={10}/> : <Square size={10}/>) : <Tag size={10} />}
+                                    {isTagSelectionMode ? (isSelectedInBatchMode ? <CheckSquare size={10}/> : <Square size={10}/>) : (
+                                        isSelectedFilter ? <Check size={10} /> : <Tag size={10} />
+                                    )}
                                     <span>{tag}</span>
                                     </button>
                                 </div>
